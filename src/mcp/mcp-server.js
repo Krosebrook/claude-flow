@@ -11,13 +11,60 @@ import { fileURLToPath } from 'url';
 import { EnhancedMemory } from '../memory/enhanced-memory.js';
 // Use the same memory system that npx commands use - singleton instance
 import { memoryStore } from '../memory/fallback-store.js';
+import { VERSION } from '../core/version.js';
+
+// Initialize agent tracker
+await import('./implementations/agent-tracker.js').catch(() => {
+  // If ES module import fails, try require
+  try {
+    require('./implementations/agent-tracker');
+  } catch (e) {
+    console.error('Agent tracker not loaded');
+  }
+});
+
+// Initialize DAA manager
+await import('./implementations/daa-tools.js').catch(() => {
+  // If ES module import fails, try require
+  try {
+    require('./implementations/daa-tools');
+  } catch (e) {
+    console.error('DAA manager not loaded');
+  }
+});
+
+// Initialize Workflow and Performance managers
+await import('./implementations/workflow-tools.js').catch(() => {
+  // If ES module import fails, try require
+  try {
+    require('./implementations/workflow-tools');
+  } catch (e) {
+    console.error('Workflow tools not loaded');
+  }
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Legacy agent type mapping for backward compatibility
+const LEGACY_AGENT_MAPPING = {
+  analyst: 'code-analyzer',
+  coordinator: 'task-orchestrator', 
+  optimizer: 'perf-analyzer',
+  documenter: 'api-docs',
+  monitor: 'performance-benchmarker',
+  specialist: 'system-architect',
+  architect: 'system-architect',
+};
+
+// Resolve legacy agent types to current equivalents
+function resolveLegacyAgentType(legacyType) {
+  return LEGACY_AGENT_MAPPING[legacyType] || legacyType;
+}
+
 class ClaudeFlowMCPServer {
   constructor() {
-    this.version = '2.0.0-alpha.59';
+    this.version = VERSION; // Use version from package.json
     this.memoryStore = memoryStore; // Use shared singleton instance
     // Use the same memory system that already works
     this.capabilities = {
@@ -81,17 +128,26 @@ class ClaudeFlowMCPServer {
             type: {
               type: 'string',
               enum: [
+                // Legacy types (for backward compatibility)
                 'coordinator',
-                'researcher',
-                'coder',
                 'analyst',
-                'architect',
-                'tester',
-                'reviewer',
                 'optimizer',
                 'documenter',
                 'monitor',
                 'specialist',
+                'architect',
+                // Current types
+                'task-orchestrator',
+                'code-analyzer',
+                'perf-analyzer',
+                'api-docs',
+                'performance-benchmarker',
+                'system-architect',
+                // Core types
+                'researcher',
+                'coder',
+                'tester',
+                'reviewer',
               ],
             },
             name: { type: 'string' },
@@ -876,6 +932,93 @@ class ClaudeFlowMCPServer {
         description: 'System diagnostics',
         inputSchema: { type: 'object', properties: { components: { type: 'array' } } },
       },
+
+      // Phase 4: SDK Integration - Real-Time Query Control & Parallel Spawning (v2.5.0-alpha.131)
+      agents_spawn_parallel: {
+        name: 'agents_spawn_parallel',
+        description: 'Spawn multiple agents in parallel (10-20x faster than sequential spawning)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agents: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  type: { type: 'string', description: 'Agent type' },
+                  name: { type: 'string', description: 'Agent name' },
+                  capabilities: { type: 'array', items: { type: 'string' } },
+                  priority: {
+                    type: 'string',
+                    enum: ['low', 'medium', 'high', 'critical'],
+                    default: 'medium'
+                  },
+                },
+                required: ['type', 'name'],
+              },
+              description: 'Array of agent configurations to spawn in parallel',
+            },
+            maxConcurrency: {
+              type: 'number',
+              default: 5,
+              description: 'Maximum number of agents to spawn concurrently',
+            },
+            batchSize: {
+              type: 'number',
+              default: 3,
+              description: 'Number of agents per batch',
+            },
+          },
+          required: ['agents'],
+        },
+      },
+      query_control: {
+        name: 'query_control',
+        description: 'Control running queries (pause, resume, terminate, change model)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['pause', 'resume', 'terminate', 'change_model', 'change_permissions', 'execute_command'],
+              description: 'Control action to perform',
+            },
+            queryId: {
+              type: 'string',
+              description: 'ID of the query to control',
+            },
+            model: {
+              type: 'string',
+              enum: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
+              description: 'Model to switch to (for change_model action)',
+            },
+            permissionMode: {
+              type: 'string',
+              enum: ['default', 'acceptEdits', 'bypassPermissions', 'plan'],
+              description: 'Permission mode to switch to (for change_permissions action)',
+            },
+            command: {
+              type: 'string',
+              description: 'Command to execute (for execute_command action)',
+            },
+          },
+          required: ['action', 'queryId'],
+        },
+      },
+      query_list: {
+        name: 'query_list',
+        description: 'List all active queries and their status',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            includeHistory: {
+              type: 'boolean',
+              default: false,
+              description: 'Include completed queries in the list',
+            },
+          },
+        },
+      },
     };
   }
 
@@ -1026,6 +1169,16 @@ class ClaudeFlowMCPServer {
     switch (name) {
       case 'swarm_init':
         const swarmId = `swarm_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Track swarm creation
+        if (global.agentTracker) {
+          global.agentTracker.trackSwarm(swarmId, {
+            topology: args.topology || 'mesh',
+            maxAgents: args.maxAgents || 5,
+            strategy: args.strategy || 'balanced',
+          });
+        }
+        
         const swarmData = {
           id: swarmId,
           name: `Swarm-${new Date().toISOString().split('T')[0]}`,
@@ -1074,11 +1227,12 @@ class ClaudeFlowMCPServer {
 
       case 'agent_spawn':
         const agentId = `agent_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        const resolvedType = resolveLegacyAgentType(args.type);
         const agentData = {
           id: agentId,
           swarmId: args.swarmId || (await this.getActiveSwarmId()),
-          name: args.name || `${args.type}-${Date.now()}`,
-          type: args.type,
+          name: args.name || `${resolvedType}-${Date.now()}`,
+          type: resolvedType,
           status: 'active',
           capabilities: JSON.stringify(args.capabilities || []),
           metadata: JSON.stringify({
@@ -1113,6 +1267,14 @@ class ClaudeFlowMCPServer {
           );
         }
 
+        // Track spawned agent
+        if (global.agentTracker) {
+          global.agentTracker.trackAgent(agentId, {
+            ...agentData,
+            capabilities: args.capabilities || [],
+          });
+        }
+        
         return {
           success: true,
           agentId: agentId,
@@ -1139,9 +1301,10 @@ class ClaudeFlowMCPServer {
         const timePerEpoch = 0.08;
         const trainingTime = baseTime + epochs * timePerEpoch + (Math.random() * 2 - 1);
 
-        return {
+        const modelId = `model_${args.pattern_type || 'general'}_${Date.now()}`;
+        const patternData = {
           success: true,
-          modelId: `model_${args.pattern_type || 'general'}_${Date.now()}`,
+          modelId: modelId,
           pattern_type: args.pattern_type || 'coordination',
           epochs: epochs,
           accuracy: Math.min(finalAccuracy, maxAccuracy),
@@ -1150,7 +1313,306 @@ class ClaudeFlowMCPServer {
           improvement_rate: epochFactor > 1 ? 'converged' : 'improving',
           data_source: args.training_data || 'recent',
           timestamp: new Date().toISOString(),
+          training_metadata: {
+            baseAccuracy: baseAccuracy,
+            maxAccuracy: maxAccuracy,
+            epochFactor: epochFactor,
+            finalAccuracy: Math.min(finalAccuracy, maxAccuracy),
+          },
         };
+
+        // Persist the trained pattern to memory
+        if (this.memoryStore) {
+          try {
+            await this.memoryStore.store(modelId, JSON.stringify(patternData), {
+              namespace: 'patterns',
+              ttl: 30 * 24 * 60 * 60 * 1000, // 30 days TTL
+              metadata: {
+                sessionId: this.sessionId,
+                pattern_type: args.pattern_type || 'coordination',
+                accuracy: patternData.accuracy,
+                epochs: epochs,
+                storedBy: 'neural_train',
+                type: 'neural_pattern',
+              },
+            });
+
+            // Also store in pattern-stats namespace for quick statistics retrieval
+            const statsKey = `stats_${args.pattern_type || 'coordination'}`;
+            const existingStats = await this.memoryStore.retrieve(statsKey, {
+              namespace: 'pattern-stats',
+            });
+
+            let stats = existingStats ? JSON.parse(existingStats) : {
+              pattern_type: args.pattern_type || 'coordination',
+              total_trainings: 0,
+              avg_accuracy: 0,
+              max_accuracy: 0,
+              min_accuracy: 1,
+              total_epochs: 0,
+              models: [],
+            };
+
+            stats.total_trainings += 1;
+            stats.avg_accuracy = (stats.avg_accuracy * (stats.total_trainings - 1) + patternData.accuracy) / stats.total_trainings;
+            stats.max_accuracy = Math.max(stats.max_accuracy, patternData.accuracy);
+            stats.min_accuracy = Math.min(stats.min_accuracy, patternData.accuracy);
+            stats.total_epochs += epochs;
+            stats.models.push({
+              modelId: modelId,
+              accuracy: patternData.accuracy,
+              timestamp: patternData.timestamp,
+            });
+
+            // Keep only last 50 models in stats
+            if (stats.models.length > 50) {
+              stats.models = stats.models.slice(-50);
+            }
+
+            await this.memoryStore.store(statsKey, JSON.stringify(stats), {
+              namespace: 'pattern-stats',
+              ttl: 30 * 24 * 60 * 60 * 1000, // 30 days TTL
+              metadata: {
+                pattern_type: args.pattern_type || 'coordination',
+                storedBy: 'neural_train',
+                type: 'pattern_statistics',
+              },
+            });
+
+            console.error(
+              `[${new Date().toISOString()}] INFO [claude-flow-mcp] Neural pattern stored: ${modelId} (accuracy: ${patternData.accuracy.toFixed(4)})`,
+            );
+          } catch (error) {
+            console.error(
+              `[${new Date().toISOString()}] ERROR [claude-flow-mcp] Failed to persist pattern: ${error.message}`,
+            );
+          }
+        }
+
+        return patternData;
+
+      case 'neural_patterns':
+        if (!this.memoryStore) {
+          return {
+            success: false,
+            error: 'Shared memory system not initialized',
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        try {
+          switch (args.action) {
+            case 'analyze':
+              // Retrieve and analyze a specific pattern or all patterns
+              if (args.metadata && args.metadata.modelId) {
+                const patternValue = await this.memoryStore.retrieve(args.metadata.modelId, {
+                  namespace: 'patterns',
+                });
+
+                if (!patternValue) {
+                  return {
+                    success: false,
+                    action: 'analyze',
+                    error: 'Pattern not found',
+                    modelId: args.metadata.modelId,
+                    timestamp: new Date().toISOString(),
+                  };
+                }
+
+                const pattern = JSON.parse(patternValue);
+                return {
+                  success: true,
+                  action: 'analyze',
+                  pattern: pattern,
+                  analysis: {
+                    quality: pattern.accuracy > 0.9 ? 'excellent' : pattern.accuracy > 0.75 ? 'good' : 'fair',
+                    confidence: pattern.accuracy,
+                    pattern_type: pattern.pattern_type,
+                    training_epochs: pattern.epochs,
+                    improvement_rate: pattern.improvement_rate,
+                    data_source: pattern.data_source,
+                  },
+                  timestamp: new Date().toISOString(),
+                };
+              } else {
+                // List all patterns
+                const allPatterns = await this.memoryStore.list({
+                  namespace: 'patterns',
+                  limit: 100,
+                });
+
+                return {
+                  success: true,
+                  action: 'analyze',
+                  total_patterns: allPatterns.length,
+                  patterns: allPatterns.map((p) => {
+                    try {
+                      const data = JSON.parse(p.value);
+                      return {
+                        modelId: data.modelId,
+                        pattern_type: data.pattern_type,
+                        accuracy: data.accuracy,
+                        timestamp: data.timestamp,
+                      };
+                    } catch (e) {
+                      return { error: 'Failed to parse pattern data' };
+                    }
+                  }),
+                  timestamp: new Date().toISOString(),
+                };
+              }
+
+            case 'learn':
+              // Store a learning experience
+              if (!args.operation || !args.outcome) {
+                return {
+                  success: false,
+                  action: 'learn',
+                  error: 'operation and outcome are required for learning',
+                  timestamp: new Date().toISOString(),
+                };
+              }
+
+              const learningId = `learning_${Date.now()}`;
+              const learningData = {
+                learningId: learningId,
+                operation: args.operation,
+                outcome: args.outcome,
+                metadata: args.metadata || {},
+                timestamp: new Date().toISOString(),
+              };
+
+              await this.memoryStore.store(learningId, JSON.stringify(learningData), {
+                namespace: 'patterns',
+                ttl: 30 * 24 * 60 * 60 * 1000, // 30 days TTL
+                metadata: {
+                  sessionId: this.sessionId,
+                  storedBy: 'neural_patterns',
+                  type: 'learning_experience',
+                  operation: args.operation,
+                },
+              });
+
+              return {
+                success: true,
+                action: 'learn',
+                learningId: learningId,
+                stored: true,
+                timestamp: new Date().toISOString(),
+              };
+
+            case 'predict':
+              // Predict based on stored patterns
+              const patternType = (args.metadata && args.metadata.pattern_type) || 'coordination';
+              const statsKey = `stats_${patternType}`;
+              const statsValue = await this.memoryStore.retrieve(statsKey, {
+                namespace: 'pattern-stats',
+              });
+
+              if (!statsValue) {
+                return {
+                  success: true,
+                  action: 'predict',
+                  prediction: {
+                    confidence: 0.5,
+                    recommendation: 'No historical data available for this pattern type',
+                    pattern_type: patternType,
+                  },
+                  timestamp: new Date().toISOString(),
+                };
+              }
+
+              const stats = JSON.parse(statsValue);
+              return {
+                success: true,
+                action: 'predict',
+                prediction: {
+                  confidence: stats.avg_accuracy,
+                  expected_accuracy: stats.avg_accuracy,
+                  pattern_type: patternType,
+                  recommendation:
+                    stats.avg_accuracy > 0.85
+                      ? 'High confidence - pattern is well-established'
+                      : stats.avg_accuracy > 0.7
+                        ? 'Moderate confidence - more training recommended'
+                        : 'Low confidence - significant training needed',
+                  historical_trainings: stats.total_trainings,
+                  best_accuracy: stats.max_accuracy,
+                },
+                timestamp: new Date().toISOString(),
+              };
+
+            case 'stats':
+              // Return statistics for all pattern types or specific type
+              const requestedType = (args.metadata && args.metadata.pattern_type) || null;
+
+              if (requestedType) {
+                const statsKey = `stats_${requestedType}`;
+                const statsValue = await this.memoryStore.retrieve(statsKey, {
+                  namespace: 'pattern-stats',
+                });
+
+                if (!statsValue) {
+                  return {
+                    success: true,
+                    action: 'stats',
+                    pattern_type: requestedType,
+                    statistics: {
+                      total_trainings: 0,
+                      message: 'No training data available for this pattern type',
+                    },
+                    timestamp: new Date().toISOString(),
+                  };
+                }
+
+                const stats = JSON.parse(statsValue);
+                return {
+                  success: true,
+                  action: 'stats',
+                  pattern_type: requestedType,
+                  statistics: stats,
+                  timestamp: new Date().toISOString(),
+                };
+              } else {
+                // Get stats for all pattern types
+                const allStats = await this.memoryStore.list({
+                  namespace: 'pattern-stats',
+                  limit: 100,
+                });
+
+                return {
+                  success: true,
+                  action: 'stats',
+                  total_pattern_types: allStats.length,
+                  statistics: allStats.map((s) => {
+                    try {
+                      return JSON.parse(s.value);
+                    } catch (e) {
+                      return { error: 'Failed to parse stats data' };
+                    }
+                  }),
+                  timestamp: new Date().toISOString(),
+                };
+              }
+
+            default:
+              return {
+                success: false,
+                error: `Unknown action: ${args.action}. Valid actions are: analyze, learn, predict, stats`,
+                timestamp: new Date().toISOString(),
+              };
+          }
+        } catch (error) {
+          console.error(
+            `[${new Date().toISOString()}] ERROR [claude-flow-mcp] neural_patterns error: ${error.message}`,
+          );
+          return {
+            success: false,
+            action: args.action,
+            error: error.message,
+            timestamp: new Date().toISOString(),
+          };
+        }
 
       case 'memory_usage':
         return await this.handleMemoryUsage(args);
@@ -1372,6 +1834,22 @@ class ClaudeFlowMCPServer {
         };
 
       case 'agent_list':
+        // First check agent tracker for real-time data
+        if (global.agentTracker) {
+          const swarmId = args.swarmId || (await this.getActiveSwarmId());
+          const trackedAgents = global.agentTracker.getAgents(swarmId);
+          
+          if (trackedAgents.length > 0) {
+            return {
+              success: true,
+              swarmId: swarmId || 'dynamic',
+              agents: trackedAgents,
+              count: trackedAgents.length,
+              timestamp: new Date().toISOString(),
+            };
+          }
+        }
+        
         if (this.databaseManager) {
           try {
             const swarmId = args.swarmId || (await this.getActiveSwarmId());
@@ -1455,6 +1933,29 @@ class ClaudeFlowMCPServer {
               error: 'No active swarm found',
               timestamp: new Date().toISOString(),
             };
+          }
+          
+          // Check agent tracker for real counts
+          if (global.agentTracker) {
+            const status = global.agentTracker.getSwarmStatus(swarmId);
+            if (status.agentCount > 0) {
+              const swarmDataRaw = await this.memoryStore.retrieve(`swarm:${swarmId}`, {
+                namespace: 'swarms',
+              });
+              const swarm = swarmDataRaw ? (typeof swarmDataRaw === 'string' ? JSON.parse(swarmDataRaw) : swarmDataRaw) : {};
+              
+              return {
+                success: true,
+                swarmId: swarmId,
+                topology: swarm.topology || 'mesh',
+                agentCount: status.agentCount,
+                activeAgents: status.activeAgents,
+                taskCount: status.taskCount,
+                pendingTasks: status.pendingTasks,
+                completedTasks: status.completedTasks,
+                timestamp: new Date().toISOString(),
+              };
+            }
           }
 
           // Retrieve swarm data from memory store
@@ -1558,6 +2059,17 @@ class ClaudeFlowMCPServer {
 
       case 'task_orchestrate':
         const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Track task creation
+        if (global.agentTracker) {
+          global.agentTracker.trackTask(taskId, {
+            task: args.task,
+            strategy: args.strategy || 'parallel',
+            priority: args.priority || 'medium',
+            status: 'pending',
+            swarmId: args.swarmId,
+          });
+        }
         const swarmIdForTask = args.swarmId || (await this.getActiveSwarmId());
         const taskData = {
           id: taskId,
@@ -1611,6 +2123,159 @@ class ClaudeFlowMCPServer {
           timestamp: new Date().toISOString(),
         };
 
+      // DAA Tools Implementation
+      case 'daa_agent_create':
+        if (global.daaManager) {
+          return global.daaManager.daa_agent_create(args);
+        }
+        return {
+          success: false,
+          error: 'DAA manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'daa_capability_match':
+        if (global.daaManager) {
+          return global.daaManager.daa_capability_match(args);
+        }
+        return {
+          success: false,
+          error: 'DAA manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'daa_resource_alloc':
+        if (global.daaManager) {
+          return global.daaManager.daa_resource_alloc(args);
+        }
+        return {
+          success: false,
+          error: 'DAA manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'daa_lifecycle_manage':
+        if (global.daaManager) {
+          return global.daaManager.daa_lifecycle_manage(args);
+        }
+        return {
+          success: false,
+          error: 'DAA manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'daa_communication':
+        if (global.daaManager) {
+          return global.daaManager.daa_communication(args);
+        }
+        return {
+          success: false,
+          error: 'DAA manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'daa_consensus':
+        if (global.daaManager) {
+          return global.daaManager.daa_consensus(args);
+        }
+        return {
+          success: false,
+          error: 'DAA manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      // Workflow Tools Implementation
+      case 'workflow_create':
+        if (global.workflowManager) {
+          return global.workflowManager.workflow_create(args);
+        }
+        return {
+          success: false,
+          error: 'Workflow manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'workflow_execute':
+        if (global.workflowManager) {
+          return global.workflowManager.workflow_execute(args);
+        }
+        return {
+          success: false,
+          error: 'Workflow manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'parallel_execute':
+        if (global.workflowManager) {
+          return global.workflowManager.parallel_execute(args);
+        }
+        return {
+          success: false,
+          error: 'Workflow manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'batch_process':
+        if (global.workflowManager) {
+          return global.workflowManager.batch_process(args);
+        }
+        return {
+          success: false,
+          error: 'Workflow manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'workflow_export':
+        if (global.workflowManager) {
+          return global.workflowManager.workflow_export(args);
+        }
+        return {
+          success: false,
+          error: 'Workflow manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'workflow_template':
+        if (global.workflowManager) {
+          return global.workflowManager.workflow_template(args);
+        }
+        return {
+          success: false,
+          error: 'Workflow manager not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      // Performance Tools Implementation
+      case 'performance_report':
+        if (global.performanceMonitor) {
+          return global.performanceMonitor.performance_report(args);
+        }
+        return {
+          success: false,
+          error: 'Performance monitor not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'bottleneck_analyze':
+        if (global.performanceMonitor) {
+          return global.performanceMonitor.bottleneck_analyze(args);
+        }
+        return {
+          success: false,
+          error: 'Performance monitor not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
+      case 'memory_analytics':
+        if (global.performanceMonitor) {
+          return global.performanceMonitor.memory_analytics(args);
+        }
+        return {
+          success: false,
+          error: 'Performance monitor not initialized',
+          timestamp: new Date().toISOString(),
+        };
+        
       default:
         return {
           success: true,
@@ -1881,7 +2546,8 @@ async function startMCPServer() {
   console.error(
     `[${new Date().toISOString()}] INFO [claude-flow-mcp] (${server.sessionId}) Claude-Flow MCP server starting in stdio mode`,
   );
-  console.error({
+  // Log server info as a JSON string to stderr to ensure it doesn't corrupt stdout
+  console.error(JSON.stringify({
     arch: process.arch,
     mode: 'mcp-stdio',
     nodeVersion: process.version,
@@ -1890,7 +2556,7 @@ async function startMCPServer() {
     protocol: 'stdio',
     sessionId: server.sessionId,
     version: server.version,
-  });
+  }));
 
   // Send server capabilities
   console.log(

@@ -1,7 +1,10 @@
 // sparc.js - SPARC development mode commands
 import { printSuccess, printError, printWarning } from '../utils.js';
+import { promises as fs } from 'fs';
+import { spawn } from 'child_process';
+import { promisify } from 'util';
 import { createSparcPrompt } from './sparc-modes/index.js';
-import { Deno, cwd, exit, existsSync } from '../node-compat.js';
+import { cwd, exit, existsSync } from '../node-compat.js';
 import process from 'process';
 
 export async function sparcCommand(subArgs, flags) {
@@ -79,21 +82,18 @@ async function listSparcModes(subArgs) {
   try {
     // Get the actual working directory where the command was run from
     const workingDir = process.env.PWD || cwd();
-    const configPath = `${workingDir}/.roomodes`;
+    const configPath = `${workingDir}/.claude/sparc-modes.json`;
     let configContent;
     try {
-      configContent = await Deno.readTextFile(configPath);
+      configContent = await fs.readFile(configPath, 'utf8');
     } catch (error) {
-      printError('SPARC configuration file (.roomodes) not found');
-      console.log(`Please ensure .roomodes file exists in: ${workingDir}`);
+      printError('SPARC configuration file not found');
+      console.log(`Looking for: ${configPath}`);
       console.log();
-      console.log('To enable SPARC development modes, run:');
-      console.log('  npx claude-flow@latest init --sparc');
+      console.log('✅ SPARC modes are now part of .claude/ folder structure');
+      console.log('Run `claude-flow init` to set up the .claude/ folder with SPARC modes');
       console.log();
-      console.log('This will create:');
-      console.log('  • .roomodes file with 17+ SPARC development modes');
-      console.log('  • .roo/ directory with templates and workflows');
-      console.log('  • SPARC-enhanced CLAUDE.md configuration');
+      console.log('Or manually ensure .claude/sparc-modes.json exists');
       return;
     }
 
@@ -131,16 +131,16 @@ async function showModeInfo(subArgs) {
   try {
     // Get the actual working directory where the command was run from
     const workingDir = process.env.PWD || cwd();
-    const configPath = `${workingDir}/.roomodes`;
+    const configPath = `${workingDir}/.claude/sparc-modes.json`;
     let configContent;
     try {
-      configContent = await Deno.readTextFile(configPath);
+      configContent = await fs.readFile(configPath, 'utf8');
     } catch (error) {
-      printError('SPARC configuration file (.roomodes) not found');
-      console.log(`Please ensure .roomodes file exists in: ${workingDir}`);
+      printError('SPARC configuration file not found');
+      console.log(`Looking for: ${configPath}`);
       console.log();
-      console.log('To enable SPARC development modes, run:');
-      console.log('  npx claude-flow@latest init --sparc');
+      console.log('✅ SPARC modes are now part of .claude/ folder structure');
+      console.log('Run `claude-flow init` to set up the .claude/ folder with SPARC modes');
       return;
     }
     const config = JSON.parse(configContent);
@@ -188,16 +188,16 @@ async function runSparcMode(subArgs, flags) {
   try {
     // Get the actual working directory where the command was run from
     const workingDir = process.env.PWD || cwd();
-    const configPath = `${workingDir}/.roomodes`;
+    const configPath = `${workingDir}/.claude/sparc-modes.json`;
     let configContent;
     try {
-      configContent = await Deno.readTextFile(configPath);
+      configContent = await fs.readFile(configPath, 'utf8');
     } catch (error) {
-      printError('SPARC configuration file (.roomodes) not found');
-      console.log(`Please ensure .roomodes file exists in: ${workingDir}`);
+      printError('SPARC configuration file not found');
+      console.log(`Looking for: ${configPath}`);
       console.log();
-      console.log('To enable SPARC development modes, run:');
-      console.log('  npx claude-flow@latest init --sparc');
+      console.log('✅ SPARC modes are now part of .claude/ folder structure');
+      console.log('Run `claude-flow init` to set up the .claude/ folder with SPARC modes');
       return;
     }
     const config = JSON.parse(configContent);
@@ -418,12 +418,16 @@ async function executeClaude(enhancedTask, toolsList, instanceId, memoryNamespac
 
     // Check if claude command exists
     try {
-      const checkCommand = new Deno.Command('which', {
-        args: ['claude'],
-        stdout: 'piped',
-        stderr: 'piped',
+      const checkResult = await new Promise((resolve) => {
+        const child = spawn('which', ['claude'], {
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+        let stdout = '';
+        child.stdout?.on('data', (data) => { stdout += data; });
+        child.on('close', (code) => {
+          resolve({ success: code === 0, stdout: Buffer.from(stdout) });
+        });
       });
-      const checkResult = await checkCommand.output();
       if (!checkResult.success) {
         console.error('❌ Error: claude command not found in PATH');
         console.error('Please ensure claude CLI is installed and in your PATH');
@@ -435,25 +439,20 @@ async function executeClaude(enhancedTask, toolsList, instanceId, memoryNamespac
       console.warn('⚠️  Could not verify claude command location');
     }
 
-    const command = new Deno.Command('claude', {
-      args: claudeArgs,
-      cwd: cwd(), // Explicitly set working directory to current directory
-      env: {
-        ...Deno.env.toObject(),
-        CLAUDE_INSTANCE_ID: instanceId,
-        CLAUDE_SPARC_MODE: 'true',
-        CLAUDE_FLOW_MEMORY_ENABLED: 'true',
-        CLAUDE_FLOW_MEMORY_NAMESPACE: memoryNamespace,
-        CLAUDE_WORKING_DIRECTORY: cwd(), // Also pass as env variable
-      },
-      stdin: 'inherit',
-      stdout: 'inherit',
-      stderr: 'inherit',
-    });
+    // Use spawn for claude command
+    const env = { ...process.env, CLAUDE_INSTANCE_ID: instanceId };
 
     console.log('\n📡 Spawning claude process...\n');
-    const child = command.spawn();
-    const status = await child.status;
+    const child = spawn('claude', claudeArgs, {
+      cwd: cwd(),
+      env: env,
+      stdio: 'inherit'
+    });
+    const status = await new Promise((resolve) => {
+      child.on('close', (code) => {
+        resolve({ code, success: code === 0 });
+      });
+    });
 
     if (status.success) {
       printSuccess(`SPARC instance ${instanceId} completed successfully`);

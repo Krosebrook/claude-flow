@@ -4,7 +4,7 @@
  * This version can be run directly from GitHub
  */
 
-const VERSION = '1.0.71';
+import { VERSION } from '../core/version.js';
 
 // Simple color functions
 const chalk = {

@@ -38,6 +38,7 @@ import { CollectiveMemory } from './hive-mind/memory.js';
 import { SwarmCommunication } from './hive-mind/communication.js';
 import { HiveMindSessionManager } from './hive-mind/session-manager.js';
 import { createAutoSaveMiddleware } from './hive-mind/auto-save-middleware.js';
+import { HiveMindMetricsReader } from './hive-mind/metrics-reader.js';
 
 function showHiveMindHelp() {
   console.log(`
@@ -56,7 +57,7 @@ ${chalk.bold('SUBCOMMANDS:')}
   ${chalk.green('consensus')}    View consensus decisions
   ${chalk.green('memory')}       Manage collective memory
   ${chalk.green('metrics')}      View performance metrics
-  ${chalk.green('wizard')}       Interactive hive mind wizard
+  ${chalk.green('wizard')}       Interactive hive mind wizard with Claude Code spawning
 
 ${chalk.bold('EXAMPLES:')}
   ${chalk.gray('# Initialize hive mind')}
@@ -71,7 +72,7 @@ ${chalk.bold('EXAMPLES:')}
   ${chalk.gray('# View current status')}
   claude-flow hive-mind status
 
-  ${chalk.gray('# Interactive wizard')}
+  ${chalk.gray('# Interactive wizard with Claude Code spawning')}
   claude-flow hive-mind wizard
 
   ${chalk.gray('# Spawn with Claude Code coordination')}
@@ -401,10 +402,16 @@ async function spawnSwarmWizard() {
       message: 'Launch monitoring dashboard?',
       default: true,
     },
+    {
+      type: 'confirm',
+      name: 'spawnClaude',
+      message: 'Spawn Claude Code instance with hive-mind coordination?',
+      default: true,
+    },
   ]);
 
   // Spawn the swarm with collected parameters
-  await spawnSwarm([answers.objective], {
+  const swarmResult = await spawnSwarm([answers.objective], {
     name: answers.name,
     queenType: answers.queenType,
     'queen-type': answers.queenType,
@@ -417,7 +424,42 @@ async function spawnSwarmWizard() {
     monitor: answers.monitor,
     namespace: answers.namespace || 'default',
     verbose: answers.verbose || false,
+    spawnClaude: answers.spawnClaude, // Pass the Claude spawning preference
   });
+
+  // If Claude Code spawning was requested, launch it using the same function as --claude flag
+  if (answers.spawnClaude && swarmResult && swarmResult.swarmId) {
+    // Create workers array in the same format expected by spawnClaudeCodeInstances
+    const workers = answers.workerTypes.map((type, index) => ({
+      id: `worker-${index + 1}`,
+      type,
+      role: 'worker',
+      status: 'active',
+      capabilities: getAgentCapabilities(type)
+    }));
+    
+    // Create flags object with the wizard settings
+    const claudeFlags = {
+      queenType: answers.queenType,
+      consensus: answers.consensusAlgorithm,
+      autoScale: answers.autoScale,
+      monitor: answers.monitor,
+      namespace: answers.namespace || 'default',
+      verbose: answers.verbose || false
+    };
+    
+    // Use the same Claude spawning function as the --claude flag
+    console.log(chalk.cyan(`\n🎯 Objective from wizard: "${answers.objective}"`));
+    await spawnClaudeCodeInstances(
+      swarmResult.swarmId,
+      answers.name,
+      answers.objective,
+      workers,
+      claudeFlags
+    );
+  }
+  
+  return swarmResult;
 }
 
 /**
@@ -426,10 +468,23 @@ async function spawnSwarmWizard() {
 async function spawnSwarm(args, flags) {
   const objective = args.join(' ').trim();
 
+  // Check for non-interactive mode FIRST
+  const isNonInteractive = flags['non-interactive'] || flags.nonInteractive;
+  
   if (!objective && !flags.wizard) {
-    console.error(chalk.red('Error: Please provide an objective or use --wizard flag'));
-    console.log('Example: claude-flow hive-mind spawn "Build REST API"');
+    if (isNonInteractive) {
+      console.error(chalk.red('Error: Objective required in non-interactive mode'));
+      console.log('Usage: claude-flow hive-mind spawn "Your objective" --non-interactive');
+    } else {
+      console.error(chalk.red('Error: Please provide an objective or use --wizard flag'));
+      console.log('Example: claude-flow hive-mind spawn "Build REST API"');
+    }
     return;
+  }
+  
+  // Log non-interactive mode status
+  if (isNonInteractive && flags.verbose) {
+    console.log(chalk.cyan('🤖 Running in non-interactive mode'));
   }
 
   // Validate parameters
@@ -583,6 +638,44 @@ async function spawnSwarm(args, flags) {
         confidence REAL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (swarm_id) REFERENCES swarms(id)
+      );
+      
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        swarm_id TEXT NOT NULL,
+        swarm_name TEXT NOT NULL,
+        objective TEXT,
+        status TEXT DEFAULT 'active',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        paused_at DATETIME,
+        resumed_at DATETIME,
+        completion_percentage REAL DEFAULT 0,
+        checkpoint_data TEXT,
+        metadata TEXT,
+        parent_pid INTEGER,
+        child_pids TEXT,
+        FOREIGN KEY (swarm_id) REFERENCES swarms(id)
+      );
+      
+      CREATE TABLE IF NOT EXISTS session_checkpoints (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        checkpoint_name TEXT NOT NULL,
+        checkpoint_data TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
+      );
+      
+      CREATE TABLE IF NOT EXISTS session_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        log_level TEXT DEFAULT 'info',
+        message TEXT,
+        agent_id TEXT,
+        data TEXT,
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
       );
     `);
       spinner.text = 'Database schema created successfully';
@@ -812,6 +905,7 @@ async function spawnSwarm(args, flags) {
     process.on('SIGTERM', sigintHandler);
 
     // Offer to spawn Claude Code instances with coordination instructions
+    // Spawn Claude if --claude or --spawn flag is set
     if (flags.claude || flags.spawn) {
       await spawnClaudeCodeInstances(swarmId, hiveMind.config.name, objective, workers, flags);
     } else {
@@ -822,6 +916,9 @@ async function spawnSwarm(args, flags) {
       );
       console.log(chalk.gray('   claude-flow hive-mind spawn "objective" --claude'));
     }
+
+    // Return swarm info for wizard use
+    return { swarmId, hiveMind };
   } catch (error) {
     spinner.fail('Failed to spawn Hive Mind swarm');
     console.error(chalk.red('Error:'), error.message);
@@ -873,22 +970,13 @@ async function showStatus(flags) {
       return;
     }
 
-    const db = new Database(dbPath);
-
-    // Get active swarms
-    const swarms = db
-      .prepare(
-        `
-      SELECT * FROM swarms 
-      WHERE status = 'active' 
-      ORDER BY created_at DESC
-    `,
-      )
-      .all();
+    // Use the metrics reader for real data
+    const metricsReader = new HiveMindMetricsReader(dbPath);
+    const swarms = metricsReader.getActiveSwarms();
 
     if (swarms.length === 0) {
       console.log(chalk.gray('No active swarms found'));
-      db.close();
+      metricsReader.close();
       return;
     }
 
@@ -902,85 +990,62 @@ async function showStatus(flags) {
       console.log(chalk.cyan('Queen Type:'), swarm.queen_type);
       console.log(chalk.cyan('Status:'), chalk.green(swarm.status));
       console.log(chalk.cyan('Created:'), new Date(swarm.created_at).toLocaleString());
-
-      // Get agents
-      const agents = db
-        .prepare(
-          `
-        SELECT * FROM agents 
-        WHERE swarm_id = ?
-      `,
-        )
-        .all(swarm.id);
+      
+      // Show real agent count
+      console.log(chalk.cyan('Total Agents:'), swarm.agent_count || 0);
 
       console.log('\n' + chalk.bold('Agents:'));
 
-      // Group by role
+      // Group by role using real agent data
+      const agents = swarm.agents || [];
       const queen = agents.find((a) => a.role === 'queen');
       const workers = agents.filter((a) => a.role === 'worker');
 
       if (queen) {
         console.log('  ' + chalk.magenta('👑 Queen:'), queen.name, chalk.gray(`(${queen.status})`));
+      } else {
+        console.log('  ' + chalk.gray('No queen assigned yet'));
       }
 
       console.log('  ' + chalk.blue('🐝 Workers:'));
-      workers.forEach((worker) => {
-        const statusColor =
-          worker.status === 'active' ? 'green' : worker.status === 'busy' ? 'yellow' : 'gray';
-        console.log(`    - ${worker.name} (${worker.type}) ${chalk[statusColor](worker.status)}`);
-      });
+      if (workers.length > 0) {
+        workers.forEach((worker) => {
+          const statusColor =
+            worker.status === 'active' ? 'green' : worker.status === 'busy' ? 'yellow' : 'gray';
+          console.log(`    - ${worker.name} (${worker.type}) ${chalk[statusColor](worker.status)}`);
+        });
+      } else {
+        console.log('    ' + chalk.gray('No workers spawned yet'));
+      }
 
-      // Get task statistics
-      const taskStats = db
-        .prepare(
-          `
-        SELECT 
-          COUNT(*) as total,
-          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-          SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as in_progress,
-          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending
-        FROM tasks
-        WHERE swarm_id = ?
-      `,
-        )
-        .get(swarm.id);
+      // Get real task statistics
+      const taskStats = swarm.task_metrics || {
+        total: 0,
+        completed: 0,
+        in_progress: 0,
+        pending: 0,
+        failed: 0
+      };
 
       console.log('\n' + chalk.bold('Tasks:'));
       console.log(`  Total: ${taskStats.total}`);
-      console.log(`  Completed: ${chalk.green(taskStats.completed)}`);
-      console.log(`  In Progress: ${chalk.yellow(taskStats.in_progress)}`);
-      console.log(`  Pending: ${chalk.gray(taskStats.pending)}`);
+      console.log(`  Completed: ${chalk.green(taskStats.completed || 0)}`);
+      console.log(`  In Progress: ${chalk.yellow(taskStats.in_progress || 0)}`);
+      console.log(`  Pending: ${chalk.gray(taskStats.pending || 0)}`);
+      console.log(`  ${chalk.bold('Completion:')} ${swarm.completion_percentage || 0}%`);
 
-      // Get memory stats
-      const memoryCount = db
-        .prepare(
-          `
-        SELECT COUNT(*) as count FROM collective_memory
-        WHERE swarm_id = ?
-      `,
-        )
-        .get(swarm.id);
-
+      // Show real memory count
       console.log('\n' + chalk.bold('Collective Memory:'));
-      console.log(`  Entries: ${memoryCount.count}`);
+      console.log(`  Entries: ${swarm.memory_count || 0}`);
 
-      // Get consensus stats
-      const consensusCount = db
-        .prepare(
-          `
-        SELECT COUNT(*) as count FROM consensus_decisions
-        WHERE swarm_id = ?
-      `,
-        )
-        .get(swarm.id);
-
+      // Show real consensus count
       console.log('\n' + chalk.bold('Consensus Decisions:'));
-      console.log(`  Total: ${consensusCount.count}`);
+      console.log(`  Total: ${swarm.consensus_count || 0}`);
     }
 
     console.log(chalk.yellow('═'.repeat(60)) + '\n');
 
-    db.close();
+    metricsReader.close();
   } catch (error) {
     console.error(chalk.red('Error:'), error.message);
     exit(1);
@@ -1481,7 +1546,16 @@ export async function hiveMindCommand(args, flags) {
       break;
 
     case 'spawn':
-      if (flags.wizard || subArgs.length === 0) {
+      // Check for non-interactive mode FIRST (like alpha.83)
+      if (flags['non-interactive'] || flags.nonInteractive) {
+        // In non-interactive mode, skip wizard and use defaults
+        if (subArgs.length === 0) {
+          console.error(chalk.red('Error: Objective required in non-interactive mode'));
+          console.log('Usage: claude-flow hive-mind spawn "Your objective" --non-interactive');
+          return;
+        }
+        await spawnSwarm(subArgs, flags);
+      } else if (flags.wizard || subArgs.length === 0) {
         await spawnSwarmWizard();
       } else {
         await spawnSwarm(subArgs, flags);
@@ -1540,19 +1614,23 @@ async function listMemories() {
   try {
     console.log(chalk.blue('\n📋 Collective Memory Store\n'));
 
-    // Use MCP wrapper to search for all memories (empty pattern matches all)
-    const mcpWrapper = await getMcpWrapper();
-    const searchResult = await mcpWrapper.searchMemory('hive-mind', '');
+    // Read directly from hive.db collective_memory table
+    const dbPath = path.join(cwd(), '.hive-mind', 'hive.db');
+    const db = new Database(dbPath);
 
-    // Handle different possible response structures
-    let memories = [];
-    if (searchResult && Array.isArray(searchResult.results)) {
-      memories = searchResult.results;
-    } else if (searchResult && Array.isArray(searchResult)) {
-      memories = searchResult;
-    } else if (searchResult && searchResult.data && Array.isArray(searchResult.data)) {
-      memories = searchResult.data;
-    }
+    const memories = db
+      .prepare(
+        `
+        SELECT cm.*, s.name as swarm_name
+        FROM collective_memory cm
+        LEFT JOIN swarms s ON cm.swarm_id = s.id
+        ORDER BY cm.created_at DESC
+        LIMIT 50
+      `,
+      )
+      .all();
+
+    db.close();
 
     if (!memories || memories.length === 0) {
       console.log(chalk.yellow('No memories found in the collective store.'));
@@ -1562,15 +1640,34 @@ async function listMemories() {
       return;
     }
 
+    console.log(chalk.gray(`Found ${memories.length} memories in the collective store:\n`));
+
     memories.forEach((memory, index) => {
-      console.log(chalk.cyan(`${index + 1}. ${memory.key || `memory-${index}`}`));
-      console.log(`   Category: ${memory.type || 'general'}`);
-      console.log(`   Created: ${new Date(memory.timestamp || Date.now()).toLocaleString()}`);
-      if (memory.value && typeof memory.value === 'object') {
-        console.log(`   Preview: ${JSON.stringify(memory.value).substring(0, 100)}...`);
-      } else {
-        console.log(`   Value: ${String(memory.value || memory).substring(0, 100)}...`);
+      console.log(chalk.cyan(`${index + 1}. ${memory.key}`));
+      console.log(`   Swarm: ${memory.swarm_name || memory.swarm_id}`);
+      console.log(`   Type: ${memory.type || 'knowledge'}`);
+      console.log(`   Created: ${new Date(memory.created_at).toLocaleString()}`);
+      console.log(`   Created by: ${memory.created_by || 'system'}`);
+      
+      // Parse and display value
+      let displayValue = memory.value;
+      try {
+        const parsed = JSON.parse(memory.value);
+        displayValue = JSON.stringify(parsed);
+      } catch {
+        // Keep as string
       }
+      
+      if (displayValue.length > 100) {
+        console.log(`   Value: ${displayValue.substring(0, 100)}...`);
+      } else {
+        console.log(`   Value: ${displayValue}`);
+      }
+      
+      if (memory.confidence !== null && memory.confidence !== 1) {
+        console.log(`   Confidence: ${(memory.confidence * 100).toFixed(1)}%`);
+      }
+      
       console.log('');
     });
   } catch (error) {
@@ -1595,29 +1692,49 @@ async function searchMemories() {
 
     console.log(chalk.blue(`\n🔍 Searching for: "${searchTerm}"\n`));
 
-    const mcpWrapper = await getMcpWrapper();
-    const searchResult = await mcpWrapper.searchMemory('hive-mind', searchTerm);
+    // Search directly in hive.db collective_memory table
+    const dbPath = path.join(cwd(), '.hive-mind', 'hive.db');
+    const db = new Database(dbPath);
 
-    // Handle different possible response structures
-    let memories = [];
-    if (searchResult && Array.isArray(searchResult.results)) {
-      memories = searchResult.results;
-    } else if (searchResult && Array.isArray(searchResult)) {
-      memories = searchResult;
-    } else if (searchResult && searchResult.data && Array.isArray(searchResult.data)) {
-      memories = searchResult.data;
-    }
+    const searchPattern = `%${searchTerm}%`;
+    const memories = db
+      .prepare(
+        `
+        SELECT cm.*, s.name as swarm_name
+        FROM collective_memory cm
+        LEFT JOIN swarms s ON cm.swarm_id = s.id
+        WHERE cm.key LIKE ? OR cm.value LIKE ? OR cm.type LIKE ?
+        ORDER BY cm.created_at DESC
+        LIMIT 50
+      `,
+      )
+      .all(searchPattern, searchPattern, searchPattern);
+
+    db.close();
 
     if (!memories || memories.length === 0) {
       console.log(chalk.yellow('No memories found matching your search.'));
       return;
     }
 
+    console.log(chalk.gray(`Found ${memories.length} memories matching "${searchTerm}":\n`));
+
     memories.forEach((memory, index) => {
-      console.log(chalk.green(`${index + 1}. ${memory.key || `result-${index}`}`));
-      console.log(`   Category: ${memory.type || 'general'}`);
-      console.log(`   Created: ${new Date(memory.timestamp || Date.now()).toLocaleString()}`);
-      console.log(`   Value: ${JSON.stringify(memory.value || memory, null, 2)}`);
+      console.log(chalk.green(`${index + 1}. ${memory.key}`));
+      console.log(`   Swarm: ${memory.swarm_name || memory.swarm_id}`);
+      console.log(`   Type: ${memory.type || 'knowledge'}`);
+      console.log(`   Created: ${new Date(memory.created_at).toLocaleString()}`);
+      
+      // Parse and display value with highlighting
+      let displayValue = memory.value;
+      try {
+        const parsed = JSON.parse(memory.value);
+        displayValue = JSON.stringify(parsed, null, 2);
+      } catch {
+        // Keep as string
+      }
+      
+      console.log(`   Value: ${displayValue}`);
       console.log('');
     });
   } catch (error) {
@@ -1935,22 +2052,50 @@ async function spawnClaudeCodeInstances(swarmId, swarmName, objective, workers, 
       }
 
       if (claudeAvailable && !flags.dryRun) {
-        // Pass the prompt directly as an argument to claude
-        // Remove --print to allow interactive session
-        const claudeArgs = [hiveMindPrompt];
-
-        // Add auto-permission flag by default for hive-mind mode (unless explicitly disabled)
-        if (flags['dangerously-skip-permissions'] !== false && !flags['no-auto-permissions']) {
-          claudeArgs.push('--dangerously-skip-permissions');
-          console.log(
-            chalk.yellow(
-              '🔓 Using --dangerously-skip-permissions by default for seamless hive-mind execution',
-            ),
-          );
+        // Inject memory coordination protocol into CLAUDE.md
+        try {
+          const { injectMemoryProtocol, enhanceHiveMindPrompt } = await import('./inject-memory-protocol.js');
+          await injectMemoryProtocol();
+          
+          // Enhance the prompt with memory coordination instructions
+          hiveMindPrompt = enhanceHiveMindPrompt(hiveMindPrompt, workers);
+          console.log(chalk.green('📝 Memory coordination protocol injected into CLAUDE.md'));
+        } catch (err) {
+          // If injection module not available, continue with original prompt
+          console.log(chalk.yellow('⚠️  Memory protocol injection not available, using standard prompt'));
+        }
+        
+        // Check if we should run in non-interactive mode
+        // Respect --non-interactive flag regardless of --claude
+        const isNonInteractive = flags['non-interactive'] || flags.nonInteractive;
+        
+        // Build arguments in correct order: flags first, then prompt
+        const claudeArgs = [];
+        
+        // Add non-interactive flags FIRST if needed
+        if (isNonInteractive) {
+          claudeArgs.push('-p'); // Print mode
+          claudeArgs.push('--output-format', 'stream-json'); // JSON streaming  
+          claudeArgs.push('--verbose'); // Verbose output
+          console.log(chalk.cyan('🤖 Running in non-interactive mode'));
         }
 
-        // Spawn claude with the prompt as the first argument
-        // Use 'inherit' to allow interactive session
+        // Add auto-permission flag BEFORE the prompt
+        if (flags['dangerously-skip-permissions'] !== false && !flags['no-auto-permissions']) {
+          claudeArgs.push('--dangerously-skip-permissions');
+          if (!isNonInteractive) {
+            console.log(
+              chalk.yellow(
+                '🔓 Using --dangerously-skip-permissions by default for seamless hive-mind execution',
+              ),
+            );
+          }
+        }
+        
+        // Add the prompt as the LAST argument
+        claudeArgs.push(hiveMindPrompt);
+
+        // Spawn claude with properly ordered arguments
         const claudeProcess = childSpawn('claude', claudeArgs, {
           stdio: 'inherit',
           shell: false,
@@ -2089,6 +2234,7 @@ async function spawnClaudeCodeInstances(swarmId, swarmName, objective, workers, 
  * Generate comprehensive Hive Mind prompt for Claude Code
  */
 function generateHiveMindPrompt(swarmId, swarmName, objective, workers, workerGroups, flags) {
+  console.log(chalk.cyan(`\n🔍 generateHiveMindPrompt received objective: "${objective}"`));
   const currentTime = new Date().toISOString();
   const workerTypes = Object.keys(workerGroups);
   const queenType = flags.queenType || 'strategic';
@@ -2147,13 +2293,30 @@ ${workerTypes.map((type) => `• ${type}: ${workerGroups[type].length} agents`).
 
 As the Queen coordinator, you must:
 
-1. **INITIALIZE THE HIVE** (Single BatchTool Message):
-   [BatchTool]:
+1. **INITIALIZE THE HIVE** (CRITICAL: Use Claude Code's Task Tool for Agents):
+   
+   Step 1: Optional MCP Coordination Setup (Single Message):
+   [MCP Tools - Coordination Only]:
    ${workerTypes.map((type) => `   mcp__claude-flow__agent_spawn { "type": "${type}", "count": ${workerGroups[type].length} }`).join('\n')}
    mcp__claude-flow__memory_store { "key": "hive/objective", "value": "${objective}" }
    mcp__claude-flow__memory_store { "key": "hive/queen", "value": "${queenType}" }
    mcp__claude-flow__swarm_think { "topic": "initial_strategy" }
-   TodoWrite { "todos": [/* Create 5-10 high-level tasks */] }
+   
+   Step 2: REQUIRED - Spawn ACTUAL Agents with Claude Code's Task Tool (Single Message):
+   [Claude Code Task Tool - CONCURRENT Agent Execution]:
+   ${workerTypes.map((type) => `   Task("${type.charAt(0).toUpperCase() + type.slice(1)} Agent", "You are a ${type} in the hive. Coordinate via hooks. ${getWorkerTypeInstructions(type).split('\n')[0]}", "${type}")`).join('\n')}
+   
+   Step 3: Batch ALL Todos Together (Single TodoWrite Call):
+   TodoWrite { "todos": [
+     { "id": "1", "content": "Initialize hive mind collective", "status": "in_progress", "priority": "high" },
+     { "id": "2", "content": "Establish consensus protocols", "status": "pending", "priority": "high" },
+     { "id": "3", "content": "Distribute initial tasks to workers", "status": "pending", "priority": "high" },
+     { "id": "4", "content": "Set up collective memory", "status": "pending", "priority": "high" },
+     { "id": "5", "content": "Monitor worker health", "status": "pending", "priority": "medium" },
+     { "id": "6", "content": "Aggregate worker outputs", "status": "pending", "priority": "medium" },
+     { "id": "7", "content": "Learn from patterns", "status": "pending", "priority": "low" },
+     { "id": "8", "content": "Optimize performance", "status": "pending", "priority": "low" }
+   ] }
 
 2. **ESTABLISH COLLECTIVE INTELLIGENCE**:
    - Use consensus_vote for major decisions
@@ -2241,12 +2404,30 @@ For the objective: "${objective}"
 5. Aggregate and synthesize all worker outputs
 6. Deliver comprehensive solution with consensus
 
-⚡ PARALLEL EXECUTION REMINDER:
-The Hive Mind operates with massive parallelism. Always batch operations:
-- Spawn ALL workers in one message
-- Create ALL initial tasks together
+⚡ CRITICAL: CONCURRENT EXECUTION WITH CLAUDE CODE'S TASK TOOL:
+
+The Hive Mind MUST use Claude Code's Task tool for actual agent execution:
+
+✅ CORRECT Pattern:
+[Single Message - All Agents Spawned Concurrently]:
+  Task("Researcher", "Research patterns and best practices...", "researcher")
+  Task("Coder", "Implement core features...", "coder")
+  Task("Tester", "Create comprehensive tests...", "tester")
+  Task("Analyst", "Analyze performance metrics...", "analyst")
+  TodoWrite { todos: [8-10 todos ALL in ONE call] }
+
+❌ WRONG Pattern:
+Message 1: Task("agent1", ...)
+Message 2: Task("agent2", ...)
+Message 3: TodoWrite { single todo }
+// This breaks parallel coordination!
+
+Remember:
+- Use Claude Code's Task tool to spawn ALL agents in ONE message
+- MCP tools are ONLY for coordination setup, not agent execution
+- Batch ALL TodoWrite operations (5-10+ todos minimum)
+- Execute ALL file operations concurrently
 - Store multiple memories simultaneously
-- Check all statuses in parallel
 
 🚀 BEGIN HIVE MIND EXECUTION:
 
@@ -2419,12 +2600,20 @@ function getWorkerTypeInstructions(workerType) {
  */
 async function showSessions(flags) {
   try {
-    const sessionManager = new HiveMindSessionManager();
-    const sessions = await sessionManager.getActiveSessions();
+    // Use metrics reader for real session data
+    const dbPath = path.join(cwd(), '.hive-mind', 'hive.db');
+    
+    if (!existsSync(dbPath)) {
+      console.log(chalk.gray('No hive mind database found'));
+      return;
+    }
+    
+    const metricsReader = new HiveMindMetricsReader(dbPath);
+    const sessions = metricsReader.getActiveSessions();
 
     if (sessions.length === 0) {
       console.log(chalk.gray('No active or paused sessions found'));
-      sessionManager.close();
+      metricsReader.close();
       return;
     }
 
@@ -2437,11 +2626,11 @@ async function showSessions(flags) {
         session.status === 'active' ? '🟢' : session.status === 'paused' ? '🟡' : '⚫';
 
       console.log(chalk.yellow('═'.repeat(60)));
-      console.log(`${statusIcon} ${chalk.bold(session.swarm_name)}`);
+      console.log(`${statusIcon} ${chalk.bold(session.swarm_name || session.id)}`);
       console.log(chalk.cyan('Session ID:'), session.id);
       console.log(chalk.cyan('Status:'), chalk[statusColor](session.status));
-      console.log(chalk.cyan('Objective:'), session.objective);
-      console.log(chalk.cyan('Progress:'), `${session.completion_percentage}%`);
+      console.log(chalk.cyan('Objective:'), session.objective || 'Not set');
+      console.log(chalk.cyan('Progress:'), `${session.completion_percentage || 0}%`);
       console.log(chalk.cyan('Created:'), new Date(session.created_at).toLocaleString());
       console.log(chalk.cyan('Last Updated:'), new Date(session.updated_at).toLocaleString());
 
@@ -2449,14 +2638,19 @@ async function showSessions(flags) {
         console.log(chalk.cyan('Paused At:'), new Date(session.paused_at).toLocaleString());
       }
 
-      console.log('\n' + chalk.bold('Progress:'));
+      console.log('\n' + chalk.bold('Real Progress:'));
       console.log(`  Agents: ${session.agent_count || 0}`);
       console.log(`  Tasks: ${session.completed_tasks || 0}/${session.task_count || 0}`);
+      console.log(`  In Progress: ${session.in_progress_tasks || 0}`);
+      console.log(`  Pending: ${session.pending_tasks || 0}`);
 
       if (session.checkpoint_data) {
         console.log('\n' + chalk.bold('Last Checkpoint:'));
+        const checkpointStr = typeof session.checkpoint_data === 'string' 
+          ? session.checkpoint_data 
+          : JSON.stringify(session.checkpoint_data, null, 2);
         console.log(
-          chalk.gray(JSON.stringify(session.checkpoint_data, null, 2).substring(0, 200) + '...'),
+          chalk.gray(checkpointStr.substring(0, 200) + (checkpointStr.length > 200 ? '...' : '')),
         );
       }
     });
@@ -2467,7 +2661,7 @@ async function showSessions(flags) {
     console.log('  • Resume a session: claude-flow hive-mind resume <session-id>');
     console.log('  • View session details: claude-flow hive-mind status');
 
-    sessionManager.close();
+    metricsReader.close();
   } catch (error) {
     console.error(chalk.red('Error:'), error.message);
     exit(1);
@@ -2493,7 +2687,7 @@ async function resumeSession(args, flags) {
     const sessionManager = new HiveMindSessionManager();
 
     // Get session details
-    const session = sessionManager.getSession(sessionId);
+    const session = await sessionManager.getSession(sessionId);
 
     if (!session) {
       spinner.fail(`Session ${sessionId} not found`);
@@ -2562,7 +2756,7 @@ async function resumeSession(args, flags) {
       const restoredPrompt = generateRestoredSessionPrompt(resumedSession);
 
       // Launch Claude Code with restored context
-      await launchClaudeWithContext(restoredPrompt, flags);
+      await launchClaudeWithContext(restoredPrompt, flags, sessionId);
     } else {
       console.log(
         '\n' +
@@ -2597,7 +2791,7 @@ async function stopSession(args, flags) {
     const sessionManager = new HiveMindSessionManager();
 
     // Get session details
-    const session = sessionManager.getSession(sessionId);
+    const session = await sessionManager.getSession(sessionId);
 
     if (!session) {
       spinner.fail(`Session ${sessionId} not found`);
@@ -2640,76 +2834,173 @@ async function stopSession(args, flags) {
  * Generate prompt for restored session
  */
 function generateRestoredSessionPrompt(session) {
-  const activeAgents = session.agents.filter((a) => a.status === 'active' || a.status === 'busy');
-  const pendingTasks = session.tasks.filter(
-    (t) => t.status === 'pending' || t.status === 'in_progress',
-  );
+  // Get all agents, not just active ones
+  const allAgents = session.agents || [];
+  const activeAgents = allAgents.filter((a) => a.status === 'active' || a.status === 'busy');
+  const idleAgents = allAgents.filter((a) => a.status === 'idle');
+  
+  // Get all tasks categorized by status
+  const allTasks = session.tasks || [];
+  const completedTasks = allTasks.filter((t) => t.status === 'completed');
+  const inProgressTasks = allTasks.filter((t) => t.status === 'in_progress');
+  const pendingTasks = allTasks.filter((t) => t.status === 'pending');
+  
+  // Calculate session duration
+  const sessionStart = new Date(session.created_at);
+  const sessionPaused = session.paused_at ? new Date(session.paused_at) : new Date();
+  const duration = Math.round((sessionPaused - sessionStart) / 1000 / 60); // minutes
+  
+  // Get more checkpoint history
+  const checkpointHistory = session.checkpoints || [];
+  
+  // Get more activity logs
+  const activityLogs = session.recentLogs || [];
+  
+  // Format agent details with their current tasks
+  const formatAgentDetails = (agents) => {
+    if (!agents.length) return 'No agents found';
+    return agents.map(agent => {
+      const agentTasks = allTasks.filter(t => t.agent_id === agent.id);
+      const currentTask = agentTasks.find(t => t.status === 'in_progress');
+      return `• ${agent.name} (${agent.type}) - ${agent.status}${currentTask ? `\n  └─ Working on: ${currentTask.description}` : ''}`;
+    }).join('\n');
+  };
+  
+  // Format task details with more information
+  const formatTaskDetails = (tasks, limit = 15) => {
+    if (!tasks.length) return 'No tasks found';
+    const displayTasks = tasks.slice(0, limit);
+    return displayTasks.map(task => {
+      const agent = allAgents.find(a => a.id === task.agent_id);
+      return `• [${task.priority?.toUpperCase() || 'NORMAL'}] ${task.description}${agent ? ` (Assigned to: ${agent.name})` : ''}${task.created_at ? ` - Created: ${new Date(task.created_at).toLocaleTimeString()}` : ''}`;
+    }).join('\n') + (tasks.length > limit ? `\n... and ${tasks.length - limit} more tasks` : '');
+  };
+  
+  // Format checkpoint details
+  const formatCheckpoints = (checkpoints, limit = 5) => {
+    if (!checkpoints.length) return 'No checkpoints found';
+    const displayCheckpoints = checkpoints.slice(0, limit);
+    return displayCheckpoints.map(cp => 
+      `• ${cp.checkpoint_name} - ${new Date(cp.created_at).toLocaleString()}`
+    ).join('\n');
+  };
+  
+  // Format activity logs with more detail
+  const formatActivityLogs = (logs, limit = 20) => {
+    if (!logs.length) return 'No activity logs found';
+    const displayLogs = logs.slice(0, limit);
+    return displayLogs.map(log => {
+      const timestamp = new Date(log.timestamp).toLocaleTimeString();
+      const agent = log.agent_id ? allAgents.find(a => a.id === log.agent_id) : null;
+      return `[${timestamp}] ${log.message}${agent ? ` (by ${agent.name})` : ''}${log.data ? ` - ${JSON.stringify(log.data)}` : ''}`;
+    }).join('\n');
+  };
+  
+  // Extract metadata if available
+  const metadata = session.metadata || {};
+  const metadataStr = Object.keys(metadata).length > 0 ? 
+    Object.entries(metadata).map(([k, v]) => `• ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join('\n') : 
+    'No metadata available';
 
   return `🔄 RESUMING HIVE MIND SESSION
 ═══════════════════════════════════
 
-You are resuming a paused Hive Mind session with the following context:
+You are resuming a Hive Mind session with comprehensive context:
 
-SESSION DETAILS:
+📋 SESSION DETAILS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📌 Session ID: ${session.id}
+📌 Swarm ID: ${session.swarm_id}
 📌 Swarm Name: ${session.swarm_name}
 🎯 Objective: ${session.objective}
-📊 Progress: ${session.statistics.completionPercentage}% complete
-⏸️ Paused: ${new Date(session.paused_at).toLocaleString()}
+📊 Overall Progress: ${session.statistics.completionPercentage}% complete
+⏱️ Session Duration: ${duration} minutes
+📅 Created: ${new Date(session.created_at).toLocaleString()}
+⏸️ Paused: ${session.paused_at ? new Date(session.paused_at).toLocaleString() : 'N/A'}
 ▶️ Resumed: ${new Date().toLocaleString()}
+🔄 Status: ${session.status}
 
-CURRENT STATUS:
-• Total Agents: ${session.statistics.totalAgents}
-• Active Agents: ${session.statistics.activeAgents}
-• Completed Tasks: ${session.statistics.completedTasks}/${session.statistics.totalTasks}
-• Pending Tasks: ${pendingTasks.length}
+📊 TASK STATISTICS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Total Tasks: ${session.statistics.totalTasks}
+• Completed: ${completedTasks.length} (${session.statistics.totalTasks > 0 ? Math.round((completedTasks.length / session.statistics.totalTasks) * 100) : 0}%)
+• In Progress: ${inProgressTasks.length}
+• Pending: ${pendingTasks.length}
 
-ACTIVE AGENTS:
-${activeAgents.map((agent) => `• ${agent.name} (${agent.type}) - ${agent.status}`).join('\n')}
+👥 SWARM COMPOSITION (${allAgents.length} agents):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Active Agents (${activeAgents.length}):
+${formatAgentDetails(activeAgents)}
 
-PENDING TASKS:
-${pendingTasks
-  .slice(0, 10)
-  .map((task) => `• [${task.priority}] ${task.description}`)
-  .join('\n')}
-${pendingTasks.length > 10 ? `... and ${pendingTasks.length - 10} more tasks` : ''}
+Idle Agents (${idleAgents.length}):
+${formatAgentDetails(idleAgents)}
 
-CHECKPOINT DATA:
+📝 COMPLETED TASKS (${completedTasks.length}):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${formatTaskDetails(completedTasks, 10)}
+
+🔄 IN-PROGRESS TASKS (${inProgressTasks.length}):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${formatTaskDetails(inProgressTasks)}
+
+⏳ PENDING TASKS (${pendingTasks.length}):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${formatTaskDetails(pendingTasks)}
+
+💾 CHECKPOINT HISTORY (${checkpointHistory.length} total):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${formatCheckpoints(checkpointHistory)}
+
+📊 SESSION METADATA:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${metadataStr}
+
+💾 LAST CHECKPOINT DATA:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ${session.checkpoint_data ? JSON.stringify(session.checkpoint_data, null, 2) : 'No checkpoint data available'}
 
-RECENT ACTIVITY:
-${session.recentLogs
-  .slice(0, 10)
-  .map((log) => `[${new Date(log.timestamp).toLocaleTimeString()}] ${log.message}`)
-  .join('\n')}
+📜 ACTIVITY LOG (Last ${Math.min(20, activityLogs.length)} entries):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${formatActivityLogs(activityLogs, 20)}
 
 🎯 RESUMPTION PROTOCOL:
-
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. **RESTORE CONTEXT**:
-   - Review the checkpoint data and recent activity
-   - Check collective memory for important decisions
-   - Verify agent status and reassign if needed
+   - Review all checkpoint data and activity history above
+   - Use mcp__claude-flow__memory_usage to retrieve collective memory
+   - Check agent statuses and reassign tasks if needed
+   - Verify all in-progress tasks are still valid
 
 2. **CONTINUE EXECUTION**:
-   - Resume pending tasks based on priority
-   - Maintain coordination with existing agents
-   - Update progress tracking regularly
+   - Resume in-progress tasks with their assigned agents
+   - Process pending tasks based on priority (CRITICAL > HIGH > NORMAL > LOW)
+   - Maintain agent coordination through memory sharing
+   - Update progress tracking after each task completion
 
-3. **COORDINATION**:
-   - Use mcp__claude-flow__memory_retrieve to access shared knowledge
-   - Continue using consensus mechanisms for decisions
-   - Maintain swarm communication protocols
+3. **COORDINATION REQUIREMENTS**:
+   - Use mcp__claude-flow__memory_usage for all cross-agent communication
+   - Apply consensus mechanisms for important decisions
+   - Maintain swarm topology: ${session.swarm?.topology || 'unknown'}
+   - Keep session checkpoint data updated regularly
 
-Resume the hive mind operation and continue working towards the objective.`;
+4. **MEMORY CONTEXT**:
+   - Session memory namespace: session-${session.id}
+   - Swarm memory namespace: swarm-${session.swarm_id}
+   - Use these namespaces to access historical decisions and context
+
+Resume the hive mind operation with full context awareness and continue working towards the objective.`;
 }
 
 /**
  * Launch Claude Code with context
  */
-async function launchClaudeWithContext(prompt, flags) {
+async function launchClaudeWithContext(prompt, flags, sessionId) {
   try {
     // ALWAYS save the prompt file first (fix for issue #330)
-    const promptFile = `hive-mind-resume-${Date.now()}.txt`;
+    // Ensure sessions directory exists
+    const sessionsDir = path.join('.hive-mind', 'sessions');
+    await mkdirAsync(sessionsDir, { recursive: true });
+    const promptFile = path.join(sessionsDir, `hive-mind-resume-${sessionId}-${Date.now()}.txt`);
     await writeFile(promptFile, prompt);
     console.log(chalk.green(`\n✓ Session context saved to: ${promptFile}`));
 
@@ -2727,55 +3018,91 @@ async function launchClaudeWithContext(prompt, flags) {
     }
 
     if (claudeAvailable && !flags.dryRun) {
-      const claudeArgs = [prompt, '--print'];
+      // Debug logging to track spawn calls
+      console.log(chalk.blue('\n🔍 Debug: About to spawn Claude Code process...'));
+      console.log(chalk.gray(`  Session ID: ${sessionId}`));
+      console.log(chalk.gray(`  Process ID: ${process.pid}`));
+      
+      // Remove --print to allow interactive session (same as initial spawn)
+      const claudeArgs = [prompt];
 
-      if (flags['dangerously-skip-permissions'] !== false && !flags['no-auto-permissions']) {
+      // Add --dangerously-skip-permissions by default for hive-mind operations
+      // unless explicitly disabled with --no-auto-permissions
+      if (!flags['no-auto-permissions']) {
         claudeArgs.push('--dangerously-skip-permissions');
+        console.log(
+          chalk.yellow(
+            '🔓 Using --dangerously-skip-permissions by default for seamless hive-mind execution',
+          ),
+        );
       }
 
-      // Use 'pipe' instead of 'inherit' to prevent terminal conflicts
+      console.log(chalk.blue('🔍 Debug: Spawning with args:'), claudeArgs.slice(0, 1).map(a => a.substring(0, 50) + '...'));
+      
+      // Use 'inherit' for interactive session (same as initial spawn)
       const claudeProcess = childSpawn('claude', claudeArgs, {
-        stdio: 'pipe',
+        stdio: 'inherit',
         shell: false,
       });
+      
+      console.log(chalk.blue('🔍 Debug: Claude process spawned with PID:'), claudeProcess.pid);
 
-      // Set up SIGINT handler for clean termination (no session pausing here since we're resuming)
-      const sigintHandler = () => {
-        console.log('\n\n' + chalk.yellow('⏹️  Terminating Claude Code...'));
-        if (claudeProcess && !claudeProcess.killed) {
-          claudeProcess.kill('SIGTERM');
+      // Track child process PID in session (same as initial spawn)
+      const sessionManager = new HiveMindSessionManager();
+      if (claudeProcess.pid) {
+        const sessions = await sessionManager.getActiveSessions();
+        const currentSession = sessions.find(s => s.id === sessionId);
+        if (currentSession) {
+          await sessionManager.addChildPid(currentSession.id, claudeProcess.pid);
         }
-        process.exit(0);
+      }
+
+      // Set up SIGINT handler for automatic session pausing (same as initial spawn)
+      let isExiting = false;
+      const sigintHandler = async () => {
+        if (isExiting) return;
+        isExiting = true;
+
+        console.log('\n\n' + chalk.yellow('⏸️  Pausing session and terminating Claude Code...'));
+        
+        try {
+          // Terminate Claude Code process if still running
+          if (claudeProcess && !claudeProcess.killed) {
+            claudeProcess.kill('SIGTERM');
+          }
+          
+          // Clean up and close session manager
+          sessionManager.close();
+          
+          console.log(chalk.green('✓') + ' Session paused successfully');
+          console.log(chalk.cyan('\nTo resume this session, run:'));
+          console.log(chalk.bold(`  claude-flow hive-mind resume ${sessionId}`));
+          console.log();
+          
+          process.exit(0);
+        } catch (error) {
+          console.error(chalk.red('Error during shutdown:'), error.message);
+          process.exit(1);
+        }
       };
 
       process.on('SIGINT', sigintHandler);
       process.on('SIGTERM', sigintHandler);
 
-      // Handle stdout
-      if (claudeProcess.stdout) {
-        claudeProcess.stdout.on('data', (data) => {
-          console.log(data.toString());
-        });
-      }
-
-      // Handle stderr
-      if (claudeProcess.stderr) {
-        claudeProcess.stderr.on('data', (data) => {
-          console.error(chalk.red(data.toString()));
-        });
-      }
-
-      // Handle process exit
-      claudeProcess.on('exit', (code) => {
-        if (code === 0) {
-          console.log(chalk.green('\n✓ Claude Code completed successfully'));
-        } else if (code !== null) {
-          console.log(chalk.red(`\n✗ Claude Code exited with code ${code}`));
+      // Handle process exit (same as initial spawn)
+      claudeProcess.on('exit', async (code, signal) => {
+        if (!isExiting) {
+          console.log('\n' + chalk.yellow('Claude Code has exited'));
+          
+          // Clean up signal handlers
+          process.removeListener('SIGINT', sigintHandler);
+          process.removeListener('SIGTERM', sigintHandler);
+          
+          // Close session manager
+          sessionManager.close();
+          
+          process.exit(code || 0);
         }
-        
-        // Clean up signal handlers
-        process.removeListener('SIGINT', sigintHandler);
-        process.removeListener('SIGTERM', sigintHandler);
       });
 
       console.log(chalk.green('\n✓ Claude Code launched with restored session context'));

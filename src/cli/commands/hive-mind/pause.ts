@@ -5,7 +5,7 @@
  * Pause active swarm sessions
  */
 
-import { Command } from 'commander';
+import { Command } from '../commander-fix.js';
 import chalk from 'chalk';
 import { HiveMindSessionManager } from '../../simple-commands/hive-mind/session-manager.js';
 import inquirer from 'inquirer';
@@ -20,7 +20,7 @@ export const pauseCommand = new Command('pause')
       if (options.session) {
         // Pause specific session
         const sessionId = options.session;
-        const session = sessionManager.getSession(sessionId);
+        const session = await sessionManager.getSession(sessionId);
 
         if (!session) {
           console.log(chalk.red(`Session ${sessionId} not found`));

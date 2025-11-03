@@ -1,110 +1,123 @@
-# 📚 Claude Flow v2.0.0 Documentation
+# 📚 Claude-Flow Documentation
 
-Welcome to the comprehensive documentation for Claude Flow v2.0.0 - Intelligent AI Agent Coordination Platform!
-
-## 🚀 Getting Started
-
-### Quick Links
-- **[Quick Start Guide](./quick-start.md)** - Get up and running in minutes
-- **[Claude Code Integration](./claude-code-setup.md)** - MCP configuration guide
-- **[CLI Reference](./cli-reference.md)** - Complete command reference
-
-## 👑 Hive Mind System (NEW!)
-
-### Core Features
-- **[Hive Mind Overview](./hive-mind/overview.md)** - Queen-led swarm intelligence
-- **[Interactive Wizard](./hive-mind/wizard-guide.md)** - Easy setup walkthrough
-- **[CLI Commands](./hive-mind/cli-commands.md)** - Complete command reference
-- **[Examples](./hive-mind/examples.md)** - Real-world usage patterns
+Welcome to the Claude-Flow documentation! This directory contains comprehensive guides and references for using Claude-Flow v2.7.0.
 
 ## 📖 Core Documentation
 
-### Architecture & Configuration
-- **[Architecture Overview](./02-architecture-overview.md)** - System design and components
-- **[Neural Networks](./neural-networks.md)** - WASM neural processing
-- **[Memory Systems](./memory-management.md)** - Persistent storage and collective memory
-- **[Swarm Coordination](./swarm-coordination.md)** - Multi-agent orchestration
+| Document | Description |
+|----------|-------------|
+| [INDEX.md](INDEX.md) | Complete documentation hub with navigation and quick start |
+| [USER_GUIDE.md](USER_GUIDE.md) | Comprehensive user guide with tutorials and examples |
+| [API_DOCUMENTATION.md](API_DOCUMENTATION.md) | Complete API reference with all 112 MCP tools |
+| [AGENTS.md](AGENTS.md) | All 65+ agent types with capabilities and usage |
+| [SWARM.md](SWARM.md) | Swarm intelligence, topologies, and coordination |
+| [SPARC.md](SPARC.md) | SPARC methodology with all 17 development modes |
+| [MCP_TOOLS.md](MCP_TOOLS.md) | Detailed reference for all MCP tools |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design patterns |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Production deployment guides for Docker, K8s, Cloud |
+| [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) | Development setup and contribution guide |
 
-### Enterprise Features
-- **[Workflow Automation](./workflow-automation.md)** - CI/CD pipeline setup
-- **[GitHub Integration](./github-automation.md)** - Repository management
-- **[WebUI Guide](./webui-guide.md)** - Browser interface
-- **[Security Guide](./security-guide.md)** - Enterprise security setup
+## 📁 Documentation Categories
 
-## 🛠️ Specialized Guides
+### 🚀 [Releases](./releases/)
+Release notes, changelogs, and version documentation
+- [v2.7.1](./releases/v2.7.1/) - Current stable release
+- [v2.7.0-alpha.10](./releases/v2.7.0-alpha.10/) - Alpha release notes
+- [v2.7.0-alpha.9](./releases/v2.7.0-alpha.9/) - Previous alpha release
+- [Alpha Tag Updates](./releases/ALPHA_TAG_UPDATE.md) - Alpha versioning guide
 
-### Setup & Initialization
-- **[Batch Initialization](./batch-initialization.md)** - Batch project setup
-- **[Initialization Scenarios](./initialization-scenarios.md)** - Common setup scenarios
-- **[Initialization Troubleshooting](./initialization-troubleshooting.md)** - Solving setup issues
-- **[Optimized Initialization](./optimized-initialization.md)** - Performance optimizations
-- **[Template Customization](./template-customization.md)** - Customizing project templates
+### 🧠 [AgentDB Integration](./agentdb/)
+AgentDB v1.3.9 integration documentation (96x-164x performance boost)
+- [Implementation Complete](./agentdb/SWARM_IMPLEMENTATION_COMPLETE.md) - 3-agent swarm details
+- [Integration Plan](./agentdb/AGENTDB_INTEGRATION_PLAN.md) - Planning and design
+- [Backward Compatibility](./agentdb/BACKWARD_COMPATIBILITY_GUARANTEE.md) - 100% compatibility guarantee
+- [Publishing Checklist](./agentdb/PUBLISHING_CHECKLIST.md) - Pre-release verification
+- [Integration Summary](./agentdb/agentdb-integration-summary.md) - Quick overview
+- [Production Readiness](./agentdb/PRODUCTION_READINESS.md) - Deployment guide
+- [Optimization Report](./agentdb/OPTIMIZATION_REPORT.md) - Performance analysis
 
-### Performance & Monitoring
-- **[Performance Comparison](./performance-comparison.md)** - Benchmarks and optimizations
-- **[Troubleshooting](./09-troubleshooting.md)** - Common issues and solutions
+### ⚡ [Performance](./performance/)
+Performance optimization guides, metrics, and benchmarks
+- [JSON Improvements](./performance/PERFORMANCE-JSON-IMPROVEMENTS.md) - JSON optimization results
+- [Metrics Guide](./performance/PERFORMANCE-METRICS-GUIDE.md) - Performance tracking and analysis
 
-## 📊 Reports & Analysis
+### 🔧 [Bug Fixes](./fixes/)
+Bug fix documentation and patch reports
+- [Pattern Persistence Fix](./fixes/PATTERN_PERSISTENCE_FIX.md) - v2.7.1 critical fix
+- [Pattern Fix Confirmation](./fixes/PATTERN_FIX_CONFIRMATION.md) - Verification and testing
+- [CLI Memory Commands](./fixes/CLI-MEMORY-COMMANDS-WORKING.md) - Memory command fixes
 
-### Performance Reports
-- **[Benchmark Analysis](./reports/COMPREHENSIVE_BENCHMARK_ANALYSIS_REPORT.md)** - Performance benchmarks
-- **[Hive Mind Performance](./reports/hive-mind-performance-analysis.md)** - Swarm optimization results
-- **[TypeScript Validation](./reports/typescript-validation-report.md)** - Code quality metrics
+### 🛠️ [Development](./development/)
+Internal development reports and implementation details
+- [Agent 1 Completion Report](./development/AGENT1_COMPLETION_REPORT.md) - AgentDB integration agent
+- [Final Init Structure](./development/FINAL_INIT_STRUCTURE.md) - Initialization architecture
+- [Commands to Skills Migration](./development/COMMANDS_TO_SKILLS_MIGRATION.md) - Migration guide
 
-### Development Documentation  
-- **[Directory Reorganization](./development/DIRECTORY_REORGANIZATION_SUMMARY.md)** - Project structure improvements
-- **[Test Consolidation](./development/TEST_CONSOLIDATION_SUMMARY.md)** - Testing strategy
-- **[Cleanup Summary](./development/CLEANUP_SUMMARY.md)** - Code maintenance
+### ✅ [Validation](./validation/)
+Test reports and validation results
+- [Docker Verification Report](./validation/DOCKER_VERIFICATION_REPORT.md) - Docker testing results
 
-### Strategy Analysis
-- **[Hive Mind Optimization](./analysis/HIVE_MIND_OPTIMIZATION_STRATEGY.md)** - System optimization strategies
+### 📚 [User Guides](./guides/)
+Tutorials and learning resources
+- [Skills Tutorial](./guides/skills-tutorial.md) - Complete guide to 25 Claude Flow skills
 
-## 🎮 User Guides
+### 🔌 [Integrations](./integrations/)
+Third-party platform integrations
+- **ReasoningBank** (16 docs) - AI reasoning integration
+- **Agentic Flow** (5 docs) - Agent flow system
+- **Agent Booster** - Performance optimization
+- **Epic SDK** - SDK integration
 
-### Essential Guides
-- **[Coordination Guide](./guides/coordination.md)** - Multi-agent coordination
-- **[Memory Bank Guide](./guides/memory-bank.md)** - Using the memory system
-- **[Optimized Init Usage](./optimized-init-usage-guide.md)** - Efficient project setup
+### 🏗️ Additional Resources
+- [Architecture](./architecture/) - System architecture documentation
+- [Experimental](./experimental/) - Experimental features
+- [Reference](./reference/) - API and command reference
+- [Setup](./setup/) - Setup and configuration guides
+- [CI/CD](./ci-cd/) - Continuous integration workflows
+- [SDK](./sdk/) - SDK documentation
+- [Wiki](./wiki/) - Additional documentation
 
-### UI & Interfaces
-- **[Swarm Blessed UI](./swarm-blessed-ui.md)** - Terminal UI interface
-- **[Start Command Consolidation](./start-command-consolidation.md)** - Command management
+## 🚀 Quick Links
 
-## 🔧 Development & API
+- **Getting Started**: See [USER_GUIDE.md](USER_GUIDE.md#getting-started)
+- **API Reference**: See [API_DOCUMENTATION.md](API_DOCUMENTATION.md)
+- **Agent Catalog**: See [AGENTS.md](AGENTS.md)
+- **Deployment**: See [DEPLOYMENT.md](DEPLOYMENT.md)
+- **Skills Tutorial**: See [Skills Tutorial](./guides/skills-tutorial.md)
+- **AgentDB Integration**: See [AgentDB](./agentdb/)
 
-### API Documentation
-- **[API Reference](./api/)** - Complete API documentation
-- **[MCP Implementation](./mcp-implementation.md)** - MCP server implementation
+## 🎯 By User Type
 
-### Examples & Demos
-- **[Examples](./examples/)** - Code examples and demos
-- **[REPL Demo](./repl-demo.md)** - Interactive REPL usage
+### 👨‍💻 **Developers**
+1. [Quick Start Guide](../README.md#-quick-start) - Get up and running
+2. [Skills Tutorial](./guides/skills-tutorial.md) - Natural language skill activation
+3. [SPARC Development](SPARC.md) - Structured development methodology
+4. [API Reference](API_DOCUMENTATION.md) - Complete endpoint documentation
 
-## 📝 Version History
+### 🏢 **DevOps/Operations**
+1. [Deployment Guide](DEPLOYMENT.md) - Production deployment
+2. [Architecture Overview](ARCHITECTURE.md) - System design
+3. [Docker Verification](./validation/DOCKER_VERIFICATION_REPORT.md) - Testing reports
 
-### v2.0.0 Highlights
-- **Hive Mind System**: Queen-led swarm intelligence with collective memory
-- **87 MCP Tools**: Complete integration with Claude Code
-- **Neural Networks**: Real WASM neural processing with training
-- **Performance**: 2.8-4.4x speed improvements, 32.3% token reduction
-- **Enterprise Ready**: Security, monitoring, and production features
+### 👑 **Technical Leaders**
+1. [System Architecture](ARCHITECTURE.md#system-overview) - High-level design
+2. [Performance Metrics](./performance/) - Benchmarks and optimization
+3. [AgentDB Integration](./agentdb/) - 96x-164x performance improvements
 
-## 🤝 Contributing
+## 📊 Performance Highlights
 
-Want to improve the documentation? See our [Contributing Guidelines](../CONTRIBUTING.md) for how to help!
+- **96x-164x faster search** - AgentDB vector search improvements
+- **4-32x memory reduction** - Quantization benefits
+- **84.8% SWE-Bench solve rate** - Industry-leading performance
+- **32.3% token reduction** - Efficient context management
+- **2.8-4.4x speed improvement** - Parallel coordination
+
+## 📞 Support
+
+- **GitHub Issues**: https://github.com/ruvnet/claude-flow/issues
+- **Discord**: Join our community for real-time help
+- **Documentation Updates**: PRs welcome!
 
 ---
 
-## 🔍 Quick Navigation
-
-| Category | Description | Key Files |
-|----------|-------------|-----------|
-| **Getting Started** | Setup and basic usage | `quick-start.md`, `01-getting-started.md` |
-| **Core Features** | Main functionality | `04-agent-management.md`, `05-task-coordination.md` |
-| **Advanced** | Power user features | `10-advanced-usage.md`, `07-mcp-integration.md` |
-| **Troubleshooting** | Problem solving | `09-troubleshooting.md`, `initialization-troubleshooting.md` |
-| **API** | Developer resources | `api/`, `cli-reference.md` |
-
----
-
-**Built with ❤️ by the Claude-Flow team | Powered by Claude AI**
+*Last Updated: January 2025 | Version: v2.7.1*

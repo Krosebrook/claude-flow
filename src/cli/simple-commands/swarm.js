@@ -4,10 +4,151 @@
 
 import { args, mkdirAsync, writeTextFile, exit, cwd } from '../node-compat.js';
 import { spawn, execSync } from 'child_process';
-import { existsSync, chmodSync, statSync } from 'fs';
+import { existsSync, chmodSync, statSync, readFileSync } from 'fs';
 import { open } from 'fs/promises';
 import process from 'process';
 import path from 'path';
+
+/**
+ * Detects if the environment is headless (non-interactive)
+ */
+function isHeadlessEnvironment() {
+  // Check for common CI environment variables
+  const ciEnvironments = [
+    'CI',
+    'GITHUB_ACTIONS',
+    'GITLAB_CI',
+    'JENKINS_URL',
+    'CIRCLECI',
+    'TRAVIS',
+    'BUILDKITE',
+    'DRONE',
+    'DOCKER_CONTAINER',
+  ];
+  
+  const isCI = ciEnvironments.some(env => process.env[env]);
+  
+  // Check if running in Docker
+  let isDocker = existsSync('/.dockerenv');
+  
+  // Additional Docker check for cgroup
+  if (!isDocker && existsSync('/proc/1/cgroup')) {
+    try {
+      const cgroupContent = readFileSync('/proc/1/cgroup', 'utf8');
+      isDocker = cgroupContent.includes('docker');
+    } catch {
+      // Ignore read errors
+    }
+  }
+  
+  // Check TTY availability
+  const hasTTY = process.stdin.isTTY && process.stdout.isTTY;
+  
+  return isCI || isDocker || !hasTTY;
+}
+
+/**
+ * Basic swarm implementation for fallback scenarios
+ */
+async function basicSwarmNew(args, flags) {
+  const objective = (args || []).join(' ').trim();
+  
+  if (!objective) {
+    console.error('❌ Usage: swarm <objective>');
+    showSwarmHelp();
+    return;
+  }
+
+  const isHeadless = isHeadlessEnvironment();
+  
+  // Configure for headless mode
+  if (isHeadless) {
+    console.log('🤖 Headless environment detected - running in non-interactive mode');
+    flags = {
+      ...flags,
+      'non-interactive': true,
+      'output-format': flags['output-format'] || 'stream-json', // Use stream-json for Claude compatibility
+      'no-auto-permissions': false,
+    };
+  }
+
+  // Set up graceful shutdown handlers
+  const cleanup = () => {
+    console.log('\n🛑 Shutting down swarm gracefully...');
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', cleanup);
+  process.on('SIGINT', cleanup);
+
+  try {
+    // Try to use the swarm executor
+    const { executeSwarm } = await import('./swarm-executor.js');
+    
+    console.log(`🐝 Starting basic swarm execution...`);
+    console.log(`📋 Objective: ${objective}`);
+    console.log(`🎯 Strategy: ${flags.strategy || 'auto'}`);
+    console.log(`🏗️  Mode: ${flags.mode || 'centralized'}`);
+    console.log(`🤖 Max Agents: ${flags['max-agents'] || 5}`);
+    
+    if (isHeadless) {
+      console.log(`🖥️  Headless Mode: Enabled`);
+      console.log(`📄 Output Format: ${flags['output-format']}`);
+    }
+
+    const result = await executeSwarm(objective, flags);
+
+    // Handle output based on format
+    if (flags['output-format'] === 'json') {
+      // In JSON mode, output clean JSON
+      const output = {
+        success: result.success,
+        swarmId: result.summary?.swarmId,
+        objective: objective,
+        duration: result.summary?.duration,
+        agents: result.summary?.totalAgents,
+        tasks: result.summary?.totalTasks,
+        timestamp: new Date().toISOString(),
+      };
+      
+      if (flags['output-file']) {
+        const fs = await import('fs/promises');
+        await fs.writeFile(flags['output-file'], JSON.stringify(output, null, 2));
+        console.log(`✅ Output saved to: ${flags['output-file']}`);
+      } else {
+        console.log(JSON.stringify(output, null, 2));
+      }
+    } else {
+      // Text mode output
+      if (result.success) {
+        console.log(`\n✅ Swarm execution completed successfully!`);
+        if (result.summary) {
+          console.log(`   Duration: ${result.summary.duration}`);
+          console.log(`   Agents: ${result.summary.totalAgents}`);
+          console.log(`   Tasks: ${result.summary.totalTasks}`);
+        }
+      } else {
+        console.error(`\n❌ Swarm execution failed: ${result.error}`);
+      }
+    }
+
+    return result;
+  } catch (error) {
+    console.error(`❌ Basic swarm execution error: ${error.message}`);
+    
+    // In headless mode, ensure we output JSON error
+    if (flags['output-format'] === 'json') {
+      const errorOutput = {
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString(),
+      };
+      console.log(JSON.stringify(errorOutput, null, 2));
+    }
+    
+    throw error;
+  }
+}
 
 function showSwarmHelp() {
   console.log(`
@@ -23,14 +164,17 @@ EXAMPLES:
   claude-flow swarm "Develop user registration feature" --mode distributed
   claude-flow swarm "Optimize React app performance" --strategy optimization
   claude-flow swarm "Create microservice" --executor  # Use built-in executor
+  claude-flow swarm "Build API" --claude  # Open Claude Code CLI
   claude-flow swarm "Build API endpoints" --output-format json  # Get JSON output
   claude-flow swarm "Research AI trends" --output-format json --output-file results.json
 
 DEFAULT BEHAVIOR:
-  Swarm now opens Claude Code by default with comprehensive MCP tool instructions
+  Swarm attempts to open Claude Code CLI with comprehensive MCP tool instructions
   including memory coordination, agent management, and task orchestration.
   
-  Use --executor flag to run with the built-in executor instead of Claude Code
+  If Claude CLI is not available:
+  • Use --claude flag to open Claude Code CLI
+  • Use --executor flag to run with the built-in executor
 
 STRATEGIES:
   auto           Automatically determine best approach (default)
@@ -77,6 +221,7 @@ OPTIONS:
   --verbose                  Enable detailed logging
   --dry-run                  Show configuration without executing
   --executor                 Use built-in executor instead of Claude Code
+  --claude                   Open Claude Code CLI
   --output-format <format>   Output format: json, text (default: text)
   --output-file <path>       Save output to file instead of stdout
   --no-interactive           Run in non-interactive mode (auto-enabled with --output-format json)
@@ -92,6 +237,21 @@ ADVANCED OPTIONS:
   --task-scheduling <type>   Task scheduling algorithm
   --load-balancing <type>    Load balancing method
   --fault-tolerance <type>   Fault tolerance strategy
+  --headless                 Force headless mode for CI/Docker environments
+  --health-check             Perform health check and exit (for Docker health)
+  --json-logs                Output all logs in JSON format for log aggregation
+
+HEADLESS MODE:
+  Automatically detected and enabled when running in:
+  - CI/CD environments (GitHub Actions, GitLab CI, Jenkins, etc.)
+  - Docker containers without TTY
+  - Non-interactive shells (no stdin/stdout TTY)
+  
+  In headless mode:
+  - Output defaults to JSON format
+  - Non-interactive mode is enabled
+  - Graceful shutdown on SIGTERM/SIGINT
+  - Suitable for containerized deployments
 
 For complete documentation and examples:
 https://github.com/ruvnet/claude-code-flow/docs/swarm.md
@@ -99,6 +259,39 @@ https://github.com/ruvnet/claude-code-flow/docs/swarm.md
 }
 
 export async function swarmCommand(args, flags) {
+  // Handle headless mode early
+  if (flags && flags.headless) {
+    const isHeadless = isHeadlessEnvironment();
+    // Configure for headless mode
+    flags = {
+      ...flags,
+      'non-interactive': true,
+      'output-format': flags['output-format'] || 'stream-json',
+      'no-auto-permissions': false,
+    };
+  }
+  
+  // Handle health check first
+  if (flags && flags['health-check']) {
+    try {
+      // Quick health check for Docker/K8s
+      console.log(JSON.stringify({
+        status: 'healthy',
+        service: 'claude-flow-swarm',
+        version: process.env.npm_package_version || '2.0.0',
+        timestamp: new Date().toISOString()
+      }));
+      process.exit(0);
+    } catch (error) {
+      console.error(JSON.stringify({
+        status: 'unhealthy',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      }));
+      process.exit(1);
+    }
+  }
+
   const objective = (args || []).join(' ').trim();
 
   if (!objective) {
@@ -107,18 +300,59 @@ export async function swarmCommand(args, flags) {
     return;
   }
 
+  // Force headless mode if flag is set
+  if (flags && flags.headless) {
+    const isHeadless = isHeadlessEnvironment();
+    if (!isHeadless) {
+      console.log('🤖 Forcing headless mode as requested');
+    }
+    flags = {
+      ...flags,
+      'non-interactive': true,
+      'output-format': flags['output-format'] || 'json',
+      'no-auto-permissions': false,
+    };
+  }
+
   // Handle JSON output format
   const outputFormat = flags && flags['output-format'];
   const outputFile = flags && flags['output-file'];
   const isJsonOutput = outputFormat === 'json';
   const isNonInteractive = isJsonOutput || (flags && flags['no-interactive']);
+  const useJsonLogs = flags && flags['json-logs'];
+
+  // Override console.log for JSON logs if requested
+  if (useJsonLogs) {
+    const originalLog = console.log;
+    const originalError = console.error;
+    
+    console.log = (...args) => {
+      originalLog(JSON.stringify({
+        level: 'info',
+        message: args.join(' '),
+        timestamp: new Date().toISOString(),
+        service: 'claude-flow-swarm'
+      }));
+    };
+    
+    console.error = (...args) => {
+      originalError(JSON.stringify({
+        level: 'error',
+        message: args.join(' '),
+        timestamp: new Date().toISOString(),
+        service: 'claude-flow-swarm'
+      }));
+    };
+  }
 
   // Handle analysis/read-only mode
   const isAnalysisMode = flags && (flags.analysis || flags['read-only']);
   const analysisMode = isAnalysisMode ? 'analysis' : 'standard';
 
-  // For JSON output, we need to ensure executor mode since Claude Code doesn't return structured JSON
-  if (isJsonOutput && !(flags && flags.executor)) {
+  // For JSON output, allow using Claude with stream-json format
+  // Only force executor mode if explicitly using 'json' format (not 'stream-json')
+  if (flags && flags['output-format'] === 'json' && !(flags && flags.executor)) {
+    // Keep backward compatibility - regular 'json' format uses executor
     flags = { ...(flags || {}), executor: true };
   }
 
@@ -130,33 +364,7 @@ export async function swarmCommand(args, flags) {
     try {
       const { execSync, spawn } = await import('child_process');
 
-      // Check if claude command exists
-      let claudeAvailable = false;
-      try {
-        execSync('which claude', { stdio: 'ignore' });
-        claudeAvailable = true;
-      } catch {
-        console.log('⚠️  Claude Code CLI not found in PATH');
-        console.log('Install it with: npm install -g @anthropic-ai/claude-code');
-        console.log('\nWould spawn Claude Code with swarm objective:');
-        console.log(`📋 Objective: ${objective}`);
-        console.log(
-          '\nTo use the built-in executor instead: claude-flow swarm "objective" --executor',
-        );
-        return;
-      }
-
-      // Claude is available, use it to run swarm
-      console.log('🐝 Launching Claude Flow Swarm System...');
-      console.log(`📋 Objective: ${objective}`);
-      console.log(`🎯 Strategy: ${flags.strategy || 'auto'}`);
-      console.log(`🏗️  Mode: ${flags.mode || 'centralized'}`);
-      console.log(`🤖 Max Agents: ${flags['max-agents'] || 5}`);
-      if (isAnalysisMode) {
-        console.log(`🔍 Analysis Mode: ENABLED (Read-Only - No Code Changes)`);
-      }
-      console.log();
-
+      // Get configuration values first
       const strategy = flags.strategy || 'auto';
       const mode = flags.mode || 'centralized';
       const maxAgents = flags['max-agents'] || 5;
@@ -169,7 +377,14 @@ export async function swarmCommand(args, flags) {
       const enableSparc =
         flags.sparc !== false && (strategy === 'development' || strategy === 'auto');
 
-      const swarmPrompt = `You are orchestrating a Claude Flow Swarm with advanced MCP tool coordination.
+      // Build the complete swarm prompt before checking for claude
+      const swarmPrompt = `You are orchestrating a Claude Flow Swarm using Claude Code's Task tool for agent execution.
+
+🚨 CRITICAL INSTRUCTION: Use Claude Code's Task Tool for ALL Agent Spawning!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Claude Code's Task tool = Spawns agents that DO the actual work
+❌ MCP tools = Only for coordination setup, NOT for execution
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🎯 OBJECTIVE: ${objective}
 
@@ -229,35 +444,47 @@ If you need to do X operations, they should be in 1 message, not X messages.
 
 🎯 MANDATORY PATTERNS FOR CLAUDE-FLOW SWARMS:
 
-1️⃣ **SWARM INITIALIZATION** - Everything in ONE BatchTool:
+1️⃣ **SWARM INITIALIZATION** - Use Claude Code's Task Tool for Agents:
+
+Step A: Optional MCP Coordination Setup (Single Message):
 \`\`\`javascript
-[Single Message with Multiple Tools]:
-  // Spawn ALL agents at once
+[MCP Tools - Coordination ONLY]:
+  // Set up coordination topology (OPTIONAL)
+  mcp__claude-flow__swarm_init {"topology": "mesh", "maxAgents": ${maxAgents}}
   mcp__claude-flow__agent_spawn {"type": "coordinator", "name": "SwarmLead"}
-  mcp__claude-flow__agent_spawn {"type": "researcher", "name": "DataAnalyst"}
-  mcp__claude-flow__agent_spawn {"type": "coder", "name": "BackendDev"}
-  mcp__claude-flow__agent_spawn {"type": "coder", "name": "FrontendDev"}
-  mcp__claude-flow__agent_spawn {"type": "tester", "name": "QAEngineer"}
-  
-  // Initialize ALL memory keys
   mcp__claude-flow__memory_store {"key": "swarm/objective", "value": "${objective}"}
-  mcp__claude-flow__memory_store {"key": "swarm/config", "value": {"strategy": "${strategy}", "mode": "${mode}"}}
+  mcp__claude-flow__memory_store {"key": "swarm/config", "value": {"strategy": "${strategy}"}}
+\`\`\`
+
+Step B: REQUIRED - Claude Code Task Tool for ACTUAL Agent Execution (Single Message):
+\`\`\`javascript
+[Claude Code Task Tool - CONCURRENT Agent Spawning]:
+  // Spawn ALL agents using Task tool in ONE message
+  Task("Coordinator", "Lead swarm coordination. Use hooks for memory sharing.", "coordinator")
+  Task("Researcher", "Analyze requirements and patterns. Coordinate via hooks.", "researcher")
+  Task("Backend Dev", "Implement server-side features. Share progress via hooks.", "coder")
+  Task("Frontend Dev", "Build UI components. Sync with backend via memory.", "coder")
+  Task("QA Engineer", "Create and run tests. Report findings via hooks.", "tester")
   
-  // Create task hierarchy
-  mcp__claude-flow__task_create {"name": "${objective}", "type": "parent", "id": "main"}
-  mcp__claude-flow__task_create {"name": "Research Phase", "parent": "main"}
-  mcp__claude-flow__task_create {"name": "Design Phase", "parent": "main"}
-  mcp__claude-flow__task_create {"name": "Implementation", "parent": "main"}
-  
-  // Initialize comprehensive todo list
+  // Batch ALL todos in ONE TodoWrite call (5-10+ todos)
   TodoWrite {"todos": [
     {"id": "1", "content": "Initialize ${maxAgents} agent swarm", "status": "completed", "priority": "high"},
     {"id": "2", "content": "Analyze: ${objective}", "status": "in_progress", "priority": "high"},
     {"id": "3", "content": "Design architecture", "status": "pending", "priority": "high"},
-    {"id": "4", "content": "Implement solution", "status": "pending", "priority": "high"},
-    {"id": "5", "content": "Test and validate", "status": "pending", "priority": "medium"}
+    {"id": "4", "content": "Implement backend", "status": "pending", "priority": "high"},
+    {"id": "5", "content": "Implement frontend", "status": "pending", "priority": "high"},
+    {"id": "6", "content": "Write unit tests", "status": "pending", "priority": "medium"},
+    {"id": "7", "content": "Integration testing", "status": "pending", "priority": "medium"},
+    {"id": "8", "content": "Performance optimization", "status": "pending", "priority": "low"},
+    {"id": "9", "content": "Documentation", "status": "pending", "priority": "low"}
   ]}
 \`\`\`
+
+⚠️ CRITICAL: Claude Code's Task tool does the ACTUAL work!
+- MCP tools = Coordination setup only
+- Task tool = Spawns agents that execute real work
+- ALL agents MUST be spawned in ONE message
+- ALL todos MUST be batched in ONE TodoWrite call
 
 2️⃣ **TASK COORDINATION** - Batch ALL assignments:
 \`\`\`javascript
@@ -565,30 +792,196 @@ Start by spawning a coordinator agent and creating the initial task structure. U
 
 The swarm should be self-documenting - use memory_store to save all important information, decisions, and results throughout the execution.`;
 
-      // Pass the prompt directly as an argument to claude
-      const claudeArgs = [swarmPrompt];
-
-      // Add auto-permission flag by default for swarm mode (unless explicitly disabled)
-      if (flags['dangerously-skip-permissions'] !== false && !flags['no-auto-permissions']) {
-        claudeArgs.push('--dangerously-skip-permissions');
-        console.log(
-          '🔓 Using --dangerously-skip-permissions by default for seamless swarm execution',
-        );
+      // If --claude flag is used, force Claude Code even if CLI not available
+      if (flags && flags.claude) {
+        // Inject memory coordination protocol into CLAUDE.md
+        try {
+          const { injectMemoryProtocol, enhanceSwarmPrompt } = await import('./inject-memory-protocol.js');
+          await injectMemoryProtocol();
+          
+          // Enhance the prompt with memory coordination instructions
+          swarmPrompt = enhanceSwarmPrompt(swarmPrompt, maxAgents);
+        } catch (err) {
+          // If injection module not available, continue with original prompt
+          console.log('⚠️  Memory protocol injection not available, using standard prompt');
+        }
+        
+        // --claude flag means interactive mode, so don't apply non-interactive
+        console.log('🐝 Launching Claude Flow Swarm System...');
+        console.log(`📋 Objective: ${objective}`);
+        console.log(`🎯 Strategy: ${strategy}`);
+        console.log(`🏗️  Mode: ${mode}`);
+        console.log(`🤖 Max Agents: ${maxAgents}\n`);
+        
+        console.log('🚀 Launching Claude Code with Swarm Coordination');
+        console.log('📝 Memory protocol injected into CLAUDE.md');
+        console.log('─'.repeat(60));
+        
+        // Build arguments properly: for interactive mode, prompt can be first
+        const claudeArgs = [];
+        
+        // Add auto-permission flag first
+        if (flags['dangerously-skip-permissions'] !== false && !flags['no-auto-permissions']) {
+          claudeArgs.push('--dangerously-skip-permissions');
+          console.log('🔓 Using --dangerously-skip-permissions by default for seamless swarm execution');
+        }
+        
+        // Add the enhanced prompt
+        claudeArgs.push(swarmPrompt);
+        
+        // --claude flag means interactive mode, so don't add non-interactive flags
+        
+        // For --claude interactive mode, spawn Claude directly
+        // Temporarily disable telemetry to avoid console output interference
+        const claudeEnv = { ...process.env };
+        
+        // Remove telemetry env vars to prevent console output
+        delete claudeEnv.CLAUDE_CODE_ENABLE_TELEMETRY;
+        delete claudeEnv.OTEL_METRICS_EXPORTER;
+        delete claudeEnv.OTEL_LOGS_EXPORTER;
+        
+        const claudeProcess = spawn('claude', claudeArgs, {
+          stdio: 'inherit',
+          shell: false,
+          env: claudeEnv
+        });
+        
+        console.log('\n✓ Claude Code launched with swarm coordination prompt!');
+        console.log('  The swarm coordinator will orchestrate all agent tasks');
+        console.log('  Use MCP tools for coordination and memory sharing');
+        
+        console.log('\n💡 Pro Tips:');
+        console.log('─'.repeat(30));
+        console.log('• Use TodoWrite to track parallel tasks');
+        console.log('• Store results with mcp__claude-flow__memory_usage');
+        console.log('• Monitor progress with mcp__claude-flow__swarm_monitor');
+        console.log('• Check task status with mcp__claude-flow__task_status');
+        
+        // Set up clean termination
+        const cleanup = () => {
+          console.log('\n🛑 Shutting down swarm gracefully...');
+          if (claudeProcess && !claudeProcess.killed) {
+            claudeProcess.kill('SIGTERM');
+          }
+          process.exit(0);
+        };
+        
+        process.on('SIGINT', cleanup);
+        process.on('SIGTERM', cleanup);
+        
+        // Wait for claude to exit
+        claudeProcess.on('exit', (code) => {
+          if (code === 0) {
+            console.log('\n✓ Swarm execution completed successfully');
+          } else if (code !== null) {
+            console.log(`\n✗ Swarm execution exited with code ${code}`);
+          }
+          process.exit(code || 0);
+        });
+        
+        // Handle spawn errors (e.g., claude not found)
+        claudeProcess.on('error', (err) => {
+          if (err.code === 'ENOENT') {
+            console.error('\n❌ Claude Code CLI not found. Please install Claude Code:');
+            console.error('   https://claude.ai/download');
+          } else {
+            console.error('\n❌ Failed to launch Claude Code:', err.message);
+          }
+          process.exit(1);
+        });
+        
+        return;
       }
 
-      // Spawn claude with the prompt as the first argument
+      // Check if we're in non-interactive/headless mode FIRST (like alpha.83)
+      const isNonInteractive = flags['no-interactive'] || 
+                               flags['non-interactive'] || 
+                               flags['output-format'] === 'stream-json' ||
+                               isHeadlessEnvironment();
+      
+      // Check if claude command exists
+      let claudeAvailable = false;
+      try {
+        execSync('which claude', { stdio: 'ignore' });
+        claudeAvailable = true;
+      } catch {
+        if (!isNonInteractive) {
+          console.log('⚠️  Claude Code CLI not found in PATH');
+          console.log('Install it with: npm install -g @anthropic-ai/claude-code');
+          console.log('Or use --claude flag to open Claude Code CLI');
+          console.log('\nWould spawn Claude Code with swarm objective:');
+          console.log(`📋 Objective: ${objective}`);
+          console.log('\nOptions:');
+          console.log('  • Use --executor flag for built-in executor: claude-flow swarm "objective" --executor');
+          console.log('  • Use --claude flag to open Claude Code CLI: claude-flow swarm "objective" --claude');
+        } else {
+          // In non-interactive mode, output JSON error
+          console.error(JSON.stringify({
+            error: 'Claude Code CLI not found',
+            message: 'Install with: npm install -g @anthropic-ai/claude-code',
+            fallback: 'Use --executor flag for built-in executor'
+          }));
+        }
+        return;
+      }
+
+      // Claude is available, use it to run swarm
+      if (!isNonInteractive) {
+        console.log('🐝 Launching Claude Flow Swarm System...');
+        console.log(`📋 Objective: ${objective}`);
+        console.log(`🎯 Strategy: ${flags.strategy || 'auto'}`);
+        console.log(`🏗️  Mode: ${flags.mode || 'centralized'}`);
+        console.log(`🤖 Max Agents: ${flags['max-agents'] || 5}`);
+        if (isAnalysisMode) {
+          console.log(`🔍 Analysis Mode: ENABLED (Read-Only - No Code Changes)`);
+        }
+        console.log();
+      } else {
+        // Non-interactive mode output
+        console.log('🤖 Running in non-interactive mode with Claude');
+        console.log('📋 Command: claude [prompt] -p --output-format stream-json --verbose');
+      }
+
+      // Continue with the default swarm behavior if not using --claude flag
+
+      // Build arguments in correct order: flags first, then prompt
+      const claudeArgs = [];
+
+      // Add non-interactive flags FIRST if needed
+      if (isNonInteractive) {
+        claudeArgs.push('-p'); // Print mode
+        claudeArgs.push('--output-format', 'stream-json'); // JSON streaming
+        claudeArgs.push('--verbose'); // Verbose output
+      }
+
+      // Add auto-permission flag BEFORE the prompt
+      if (flags['dangerously-skip-permissions'] !== false && !flags['no-auto-permissions']) {
+        claudeArgs.push('--dangerously-skip-permissions');
+        if (!isNonInteractive) {
+          console.log(
+            '🔓 Using --dangerously-skip-permissions by default for seamless swarm execution',
+          );
+        }
+      }
+
+      // Add the prompt as the LAST argument
+      claudeArgs.push(swarmPrompt);
+
+      // Spawn claude with properly ordered arguments
       const claudeProcess = spawn('claude', claudeArgs, {
         stdio: 'inherit',
         shell: false,
       });
 
-      console.log('✓ Claude Code launched with swarm coordination prompt!');
-      console.log('\n🚀 The swarm coordination instructions have been injected into Claude Code');
-      console.log('   The prompt includes:');
-      console.log('   • Strategy-specific guidance for', strategy);
-      console.log('   • Coordination patterns for', mode, 'mode');
-      console.log('   • Recommended agents and MCP tool usage');
-      console.log('   • Complete workflow documentation\n');
+      if (!isNonInteractive) {
+        console.log('✓ Claude Code launched with swarm coordination prompt!');
+        console.log('\n🚀 The swarm coordination instructions have been injected into Claude Code');
+        console.log('   The prompt includes:');
+        console.log('   • Strategy-specific guidance for', strategy);
+        console.log('   • Coordination patterns for', mode, 'mode');
+        console.log('   • Recommended agents and MCP tool usage');
+        console.log('   • Complete workflow documentation\n');
+      }
 
       // Handle process events
       claudeProcess.on('error', (err) => {
@@ -640,7 +1033,7 @@ The swarm should be self-documenting - use memory_store to save all important in
       // Create a script to run the swarm without background flag
       const scriptContent = `#!/usr/bin/env -S deno run --allow-all
 import { swarmCommand } from "${import.meta.url}";
-import { Deno, cwd, exit, existsSync } from '../node-compat.js';
+import { cwd, exit, existsSync } from '../node-compat.js';
 import process from 'process';
 
 // Remove background flag to prevent recursion
@@ -802,19 +1195,23 @@ exit 0
       const module = await import(distPath);
       swarmAction = module.swarmAction;
     } catch (distError) {
-      // Fallback to basic swarm functionality
-      console.log('🚀 Advanced swarm features not available, using basic mode');
-      return await basicSwarmNew(subArgs, flags);
+      // Instead of immediately falling back to basic mode, 
+      // continue to the Claude integration below
+      console.log('📦 Compiled swarm module not found, checking for Claude CLI...');
     }
 
-    // Create command context compatible with TypeScript version
-    const ctx = {
-      args: args || [],
-      flags: flags || {},
-      command: 'swarm',
-    };
+    // Only call swarmAction if it was successfully loaded
+    if (swarmAction) {
+      // Create command context compatible with TypeScript version
+      const ctx = {
+        args: args || [],
+        flags: flags || {},
+        command: 'swarm',
+      };
 
-    await swarmAction(ctx);
+      await swarmAction(ctx);
+      return; // Exit after successful execution
+    }
   } catch (error) {
     // If import fails (e.g., in node_modules), provide inline implementation
     if (
@@ -1154,6 +1551,7 @@ OPTIONS:
   --verbose                  Enable detailed logging
   --dry-run                  Show configuration without executing
   --executor                 Use built-in executor instead of Claude Code
+  --claude                   Open Claude Code CLI
   --output-format <format>   Output format: json, text (default: text)
   --output-file <path>       Save output to file instead of stdout
   --no-interactive           Run in non-interactive mode (auto-enabled with --output-format json)

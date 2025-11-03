@@ -7,7 +7,7 @@
 // Import and run the simple CLI which doesn't have external dependencies
 import './simple-cli.ts';
 // Spinner import removed - not available in current cliffy version
-import { Command } from 'commander';
+import { Command } from './commander-fix.js';
 import chalk from 'chalk';
 import { logger } from '../core/logger.js';
 import { configManager } from '../core/config.js';
@@ -25,10 +25,7 @@ import { mcpCommand } from './commands/mcp.js';
 import { formatError, displayBanner, displayVersion } from './formatter.js';
 import { startREPL } from './repl.js';
 import { CompletionGenerator } from './completion.js';
-
-// Version information
-const VERSION = '1.0.71';
-const BUILD_DATE = new Date().toISOString().split('T')[0];
+import { VERSION, BUILD_DATE } from '../core/version.js';
 
 // Main CLI command
 const cli = new Command()
