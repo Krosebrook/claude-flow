@@ -10,7 +10,7 @@
     "test:full": "npm run clean && npm run test && npm run analyze"
   },
   "dependencies": {
-    "claude-flow": "latest",
+    "claude-flow": "2.0.1",
     "tsx": "^4.0.0"
   },
   "devDependencies": {
